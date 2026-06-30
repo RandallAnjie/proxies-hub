@@ -125,7 +125,7 @@
     </div>
 
     <div class="chart">
-      <div class="ct"><span>命中率 · 实时折线 <small>(每 15s 采样)</small></span><span>当前区间 <b id="ph-chart-now">—</b></span></div>
+      <div class="ct"><span>命中率 · 近 24 小时 <small>(每格 1 小时)</small></span><span>本小时 <b id="ph-chart-now">—</b></span></div>
       <svg id="ph-chart" viewBox="0 0 600 120" preserveAspectRatio="none"></svg>
     </div>
 
@@ -265,34 +265,37 @@ echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://apt.__DOMAIN__/
         '<div class="track"><i style="width:'+pct+'%"></i></div></div>');
     });
   }
-  function chart(history){
+  function chart(series){
     var svg=document.getElementById('ph-chart'); if(!svg)return;
-    var W=600,H=120,P=4,pts=[];
-    for(var i=1;i<history.length;i++){
-      var dh=history[i].hits-history[i-1].hits, dm=history[i].misses-history[i-1].misses, tot=dh+dm;
-      pts.push(tot>0? dh/tot*100 : null);
-    }
+    var W=600,H=120,P=4;
+    // server already buckets per hour and carries empty hours forward
+    var pts=(series||[]).map(function(p){return (p&&p.rate!=null)?p.rate:null;});
     var grid='';
     [0,25,50,75,100].forEach(function(p){
       var y=H-P-(p/100)*(H-2*P);
       grid+='<line class="grid" x1="0" y1="'+y+'" x2="'+W+'" y2="'+y+'"/>';
       if(p%50===0) grid+='<text class="gtxt" x="2" y="'+(y-2)+'">'+p+'%</text>';
     });
-    var valid=pts.filter(function(v){return v!==null;});
-    if(valid.length<2){ svg.innerHTML=grid+'<text class="gtxt" x="300" y="64" text-anchor="middle">采集中…</text>'; txt('ph-chart-now','—'); return; }
-    var n=pts.length,last=null;
+    var first=pts.findIndex(function(v){return v!==null;});
+    if(first<0){ svg.innerHTML=grid+'<text class="gtxt" x="300" y="64" text-anchor="middle">采集中…</text>'; txt('ph-chart-now','—'); return; }
+    pts=pts.slice(first);
+    for(var i=1;i<pts.length;i++){ if(pts[i]===null) pts[i]=pts[i-1]; }  // carry forward
+    var n=pts.length;
     function X(i){return P+(n>1? i/(n-1):0)*(W-2*P);}
     function Y(v){return H-P-(v/100)*(H-2*P);}
-    var dLine='',started=false;
-    for(var j=0;j<n;j++){
-      if(pts[j]===null){started=false;continue;}
-      dLine+=(started?'L':'M')+X(j).toFixed(1)+' '+Y(pts[j]).toFixed(1)+' '; started=true; last=pts[j];
+    var dLine,dArea;
+    if(n===1){
+      var y=Y(pts[0]).toFixed(1);
+      dLine='M'+P+' '+y+' L'+(W-P)+' '+y;
+      dArea='M'+P+' '+y+' L'+(W-P)+' '+y+' L'+(W-P)+' '+(H-P)+' L'+P+' '+(H-P)+' Z';
+    } else {
+      dLine=''; for(var j=0;j<n;j++){ dLine+=(j?'L':'M')+X(j).toFixed(1)+' '+Y(pts[j]).toFixed(1)+' '; }
+      dArea='M'+X(0).toFixed(1)+' '+Y(pts[0]).toFixed(1)+' ';
+      for(var q=0;q<n;q++){ dArea+='L'+X(q).toFixed(1)+' '+Y(pts[q]).toFixed(1)+' '; }
+      dArea+='L'+X(n-1).toFixed(1)+' '+(H-P)+' L'+X(0).toFixed(1)+' '+(H-P)+' Z';
     }
-    var carry=valid[0],dArea='M'+X(0).toFixed(1)+' '+Y(carry).toFixed(1)+' ';
-    for(var q=0;q<n;q++){ if(pts[q]!==null)carry=pts[q]; dArea+='L'+X(q).toFixed(1)+' '+Y(carry).toFixed(1)+' '; }
-    dArea+='L'+X(n-1).toFixed(1)+' '+(H-P)+' L'+X(0).toFixed(1)+' '+(H-P)+' Z';
     svg.innerHTML=grid+'<path class="area" d="'+dArea+'"/><path class="line" d="'+dLine+'"/>';
-    txt('ph-chart-now', last!=null? Math.round(last)+'%':'—');
+    txt('ph-chart-now', Math.round(pts[n-1])+'%');
   }
   function load(){
     fetch('/phstatus?t='+Date.now()).then(function(r){return r.json()}).then(function(d){

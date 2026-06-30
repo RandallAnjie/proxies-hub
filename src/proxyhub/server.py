@@ -10,6 +10,7 @@ Endpoints: /healthz, /status (json metrics).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import Counter, deque
@@ -56,6 +57,53 @@ from .proxies.webcache import GenericCacheProxy, WebCacheProxy
 log = logging.getLogger("proxyhub")
 
 
+class HourlyHitRate:
+    """Hit-rate series bucketed into 1-hour units for the dashboard chart.
+
+    Each completed hour stores its own hit rate — hits / (hits + misses) over
+    just that hour, computed from the cumulative counters at the hour's start
+    and end. An hour with **no requests** carries the previous hour's value
+    forward (a flat line) instead of dropping out. A 60s background tick keeps
+    buckets advancing even while nobody is watching the dashboard.
+    """
+
+    def __init__(self, cache, hours: int = 24):
+        self._cache = cache
+        self._points: deque = deque(maxlen=hours)   # {hour, rate, reqs}
+        self._hour: int | None = None
+        self._start = (0, 0)                         # (hits, misses) at hour start
+
+    def _rate(self, dh: int, dm: int):
+        tot = dh + dm
+        if tot > 0:
+            return round(dh / tot * 100, 1)
+        return self._points[-1]["rate"] if self._points else None   # carry forward
+
+    def tick(self, now: float):
+        h = int(now // 3600)
+        hits, misses = self._cache.hits, self._cache.misses
+        if self._hour is None:
+            self._hour, self._start = h, (hits, misses)
+            return
+        while h > self._hour:                        # close out each elapsed hour
+            self._points.append({
+                "hour": self._hour,
+                "rate": self._rate(hits - self._start[0], misses - self._start[1]),
+                "reqs": (hits - self._start[0]) + (misses - self._start[1]),
+            })
+            self._hour += 1
+            self._start = (hits, misses)
+
+    def series(self, now: float) -> list:
+        self.tick(now)
+        out = list(self._points)
+        hits, misses = self._cache.hits, self._cache.misses
+        dh, dm = hits - self._start[0], misses - self._start[1]
+        out.append({"hour": self._hour, "rate": self._rate(dh, dm),
+                    "reqs": dh + dm, "current": True})
+        return out
+
+
 def build_app(cfg: Config) -> web.Application:
     cache = DiskCache(cfg.cache_dir, cfg.cache_max_bytes,
                       protect_window=cfg.cache_protect_window,
@@ -64,21 +112,7 @@ def build_app(cfg: Config) -> web.Application:
     routes: dict[str, object] = {}
     reqs: Counter = Counter()
     started = time.time()
-    # rolling samples for the live hit-rate chart (~1h at one sample / ~15s)
-    history: deque = deque(maxlen=240)
-    last_sample = [0.0]
-
-    def sample():
-        now = time.time()
-        if now - last_sample[0] < 13:
-            return
-        last_sample[0] = now
-        cs = cache.stats()
-        history.append({
-            "t": int(now), "hits": cs["hits"], "misses": cs["misses"],
-            "cache_bytes": cs["cache_bytes"], "bytes_served": cs["bytes_served"],
-            "req": sum(reqs.values()),
-        })
+    hourly = HourlyHitRate(cache, hours=24)   # per-hour hit-rate for the chart
 
     for name, reg in cfg.docker.items():
         routes[f"{name}.docker.{cfg.domain}"] = DockerProxy(reg, cache)
@@ -98,7 +132,6 @@ def build_app(cfg: Config) -> web.Application:
         if request.path == "/healthz":
             return web.json_response({"ok": True, "routes": sorted(routes)})
         if request.path in ("/status", "/phstatus"):
-            sample()
             return web.json_response({
                 "uptime": int(time.time() - started),
                 "routes": sorted(routes),
@@ -106,7 +139,7 @@ def build_app(cfg: Config) -> web.Application:
                 "requests_by_host": dict(reqs),
                 "cache": cache.stats(),
                 "cache_breakdown": cache.breakdown(),
-                "history": list(history),
+                "history": hourly.series(time.time()),
             })
         host = request.host.split(":")[0]
         proxy = routes.get(host)
@@ -123,8 +156,23 @@ def build_app(cfg: Config) -> web.Application:
             log.exception("proxy error")
             return web.Response(status=502, text=f"upstream error: {e}\n")
 
+    async def _ticker():
+        while True:
+            await asyncio.sleep(60)
+            hourly.tick(time.time())
+
+    async def _start_bg(app):
+        app["_ticker"] = asyncio.create_task(_ticker())
+
+    async def _stop_bg(app):
+        t = app.get("_ticker")
+        if t:
+            t.cancel()
+
     app = web.Application(client_max_size=0)
     app.router.add_route("*", "/{tail:.*}", dispatch)
+    app.on_startup.append(_start_bg)
+    app.on_cleanup.append(_stop_bg)
     app.on_cleanup.append(lambda _app: upstream.close())
     app["routes"] = routes
     return app
