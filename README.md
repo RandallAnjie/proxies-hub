@@ -19,6 +19,11 @@ slow client can never cause an upstream connection to time out mid-transfer.
 ### Highlights
 - **Decoupled buffering cache** (`cache.py`): upstream fetch paced by the server,
   not the client; concurrent readers share one fill; LRU eviction by size.
+- **Chunked ("ranged") upstream fetch** (`base.py`): a large blob is pulled from
+  upstream in sequential 128 MB `Range` chunks, so no single upstream connection
+  stays open long enough to be cut — ghcr/CDNs drop slow long-lived fetches at
+  ~600 s. Reassembled into one logical stream; the response always carries a
+  known `Content-Length` (docker/containerd reconnect endlessly without it).
 - **Docker**: resolves the `WWW-Authenticate: Bearer` challenge and fetches a
   token using configured credentials (a PAT for private ghcr), caches by digest.
 - **GitHub token aliases**: `?token=team` is swapped server-side for a real PAT,
@@ -99,3 +104,19 @@ Implemented and **live-tested**:
 
 Everything above is unit-tested and live-tested. Possible future work: ETag/
 conditional revalidation for indexes, and a Prometheus `/metrics` exposition.
+
+### Verified: pulls that take longer than 10 minutes
+
+The original failure this project set out to kill: a large layer whose transfer
+outlasts the upstream's ~600 s cut window, surfacing to docker as
+`unexpected EOF`. Measured end-to-end against a 12.8 GB (39.5 GB unpacked,
+31-layer) **private ghcr** image over a slow ghcr→server link:
+
+- Full `docker pull` completes; image digest matches the upstream index exactly.
+- Cold concurrent fetch of the three largest layers (3.18 / 2.91 / 2.63 GB) —
+  the longest single client connection stayed open **13.8 minutes** and returned
+  `200` with a byte-exact body; chunked upstream fetch kept every upstream
+  connection short-lived, so none hit the cut window.
+- A resumed `Range: bytes=N-` request (how docker restarts an interrupted layer)
+  is served `206` from the growing/cached file with sub-100 ms TTFB.
+- Warm re-read of a cached layer streams from disk at ~180 MB/s.
