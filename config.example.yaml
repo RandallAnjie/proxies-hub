@@ -1,0 +1,49 @@
+# proxyhub configuration. Secrets via ${ENV_VAR}.
+host: 0.0.0.0
+port: 8080
+domain: proxies.live
+
+cache:
+  dir: /var/cache/proxyhub
+  max_size: 100g
+
+docker:
+  hub:
+    upstream: https://registry-1.docker.io
+  ghcr:
+    upstream: https://ghcr.io
+    username: ${GHCR_USER}
+    password: ${GHCR_PAT}        # PAT with read:packages for private images
+    manifest_ttl: 60
+  gcr:
+    upstream: https://gcr.io
+  quay:
+    upstream: https://quay.io
+  k8s:
+    upstream: https://registry.k8s.io
+  mcr:
+    upstream: https://mcr.microsoft.com
+
+web:
+  conda:
+    upstream: https://conda.anaconda.org
+    no_cache:
+      - 'repodata.*\.json$'
+      - 'current_repodata\.json$'
+      - '/$'
+  torch:
+    upstream: https://download.pytorch.org
+    no_cache:
+      - '/$'
+      - '\.html$'
+
+github:
+  enabled: true
+  token_aliases:
+    # shared word -> real PAT; clients use ?token=team
+    team: ${GITHUB_PAT}
+
+apt:
+  enabled: true
+  scheme: https   # reach upstream apt hosts over https (ubuntu + nvidia ok)
+
