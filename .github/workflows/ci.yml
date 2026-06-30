@@ -21,37 +21,77 @@ jobs:
       - name: Build image (smoke)
         run: docker build -t proxyhub:ci .
 
-  publish:
+  # gate: only publish on push, and only when Docker Hub secrets are present
+  check:
     needs: test
-    runs-on: ubuntu-latest
-    # never publish from forks / PRs; only on pushes to main or version tags
     if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.c.outputs.ok }}
     steps:
-      - uses: actions/checkout@v4
-
-      # stays green until you add the secrets, then starts pushing
-      - name: Docker Hub credentials present?
-        id: creds
+      - id: c
         run: echo "ok=${{ secrets.DOCKERHUB_TOKEN != '' && secrets.DOCKERHUB_USERNAME != '' }}" >> "$GITHUB_OUTPUT"
 
-      - name: Skip note
-        if: steps.creds.outputs.ok != 'true'
-        run: echo "::notice::DOCKERHUB_USERNAME / DOCKERHUB_TOKEN not set — skipping image publish."
-
-      - uses: docker/setup-qemu-action@v3
-        if: steps.creds.outputs.ok == 'true'
+  # one native build per arch (no QEMU): amd64 on x86, arm64 on an ARM runner.
+  # each pushes a digest-only image; the merge job stitches them into one tag.
+  build:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-        if: steps.creds.outputs.ok == 'true'
-
       - uses: docker/login-action@v3
-        if: steps.creds.outputs.ok == 'true'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ secrets.DOCKERHUB_USERNAME }}/proxies,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
 
-      - name: Image tags
-        id: meta
-        if: steps.creds.outputs.ok == 'true'
+  # combine the per-arch digests into one multi-arch manifest with the real tags
+  merge:
+    needs: [check, build]
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/proxies
@@ -60,15 +100,11 @@ jobs:
             type=sha,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-
-      - name: Build & push (amd64 + arm64)
-        if: steps.creds.outputs.ok == 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create & push manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ secrets.DOCKERHUB_USERNAME }}/proxies@sha256:%s ' *)
+      - name: Inspect
+        run: docker buildx imagetools inspect ${{ secrets.DOCKERHUB_USERNAME }}/proxies:${{ steps.meta.outputs.version }}
