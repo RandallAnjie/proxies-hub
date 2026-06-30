@@ -157,6 +157,32 @@ class DiskCache:
     def _is_pinned(self, key: str) -> bool:
         return bool(key) and any(p.search(key) for p in self._pins)
 
+    @staticmethod
+    def _group_label(key: str) -> str:
+        """Service label for a cache key — the cache is one shared pool, this
+        just buckets entries by which proxy wrote them (key prefix)."""
+        if not key:
+            return "other"
+        parts = key.split(":", 2)
+        p0 = parts[0]
+        if p0 == "docker" and len(parts) >= 2:
+            return "docker/" + parts[1]
+        if p0 == "web" and len(parts) >= 2:
+            return parts[1]
+        if p0 == "gen":
+            return "generic"
+        return p0  # pypi, apt, …
+
+    def breakdown(self) -> dict:
+        """Per-service {files, bytes} from the in-memory index."""
+        groups: dict[str, dict] = {}
+        for e in self._index.values():
+            g = groups.setdefault(self._group_label(e.get("key", "") or ""),
+                                   {"files": 0, "bytes": 0})
+            g["files"] += 1
+            g["bytes"] += int(e.get("size", 0))
+        return groups
+
     def stats(self) -> dict:
         total_req = self.hits + self.misses
         return {

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import Counter
+from collections import Counter, deque
 
 from aiohttp import web
 
@@ -36,6 +36,21 @@ def build_app(cfg: Config) -> web.Application:
     routes: dict[str, object] = {}
     reqs: Counter = Counter()
     started = time.time()
+    # rolling samples for the live hit-rate chart (~1h at one sample / ~15s)
+    history: deque = deque(maxlen=240)
+    last_sample = [0.0]
+
+    def sample():
+        now = time.time()
+        if now - last_sample[0] < 13:
+            return
+        last_sample[0] = now
+        cs = cache.stats()
+        history.append({
+            "t": int(now), "hits": cs["hits"], "misses": cs["misses"],
+            "cache_bytes": cs["cache_bytes"], "bytes_served": cs["bytes_served"],
+            "req": sum(reqs.values()),
+        })
 
     for name, reg in cfg.docker.items():
         routes[f"{name}.docker.{cfg.domain}"] = DockerProxy(reg, cache)
@@ -53,12 +68,15 @@ def build_app(cfg: Config) -> web.Application:
         if request.path == "/healthz":
             return web.json_response({"ok": True, "routes": sorted(routes)})
         if request.path == "/status":
+            sample()
             return web.json_response({
                 "uptime": int(time.time() - started),
                 "routes": sorted(routes),
                 "requests_total": sum(reqs.values()),
                 "requests_by_host": dict(reqs),
                 "cache": cache.stats(),
+                "cache_breakdown": cache.breakdown(),
+                "history": list(history),
             })
         host = request.host.split(":")[0]
         proxy = routes.get(host)
