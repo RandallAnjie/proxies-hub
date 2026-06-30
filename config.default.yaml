@@ -1,0 +1,54 @@
+# Default config baked into the image so `docker run -p 8080:8080 proxyhub`
+# works out of the box. Override by mounting your own /app/config.yaml, or set
+# PROXYHUB_* env vars: DOMAIN, FOOTER, BRAND, HOST, PORT, CACHE_DIR, CACHE_MAX.
+# TLS / certificates are NOT handled here — put your own reverse proxy in front.
+host: 0.0.0.0
+port: 8080
+domain: example.com            # -> set PROXYHUB_DOMAIN=your.domain
+
+cache:
+  dir: /var/cache/proxyhub
+  max_size: 50g                # -> PROXYHUB_CACHE_MAX=250g
+  protect_window: 600
+  low_water: 0.92
+  pin: []
+
+docker:
+  hub:     { upstream: https://registry-1.docker.io }
+  ghcr:    { upstream: https://ghcr.io }
+  gcr:     { upstream: https://gcr.io }
+  k8s-gcr: { upstream: https://k8s.gcr.io }
+  k8s:     { upstream: https://registry.k8s.io }
+  quay:    { upstream: https://quay.io }
+  mcr:     { upstream: https://mcr.microsoft.com }
+  elastic: { upstream: https://docker.elastic.co }
+  nvcr:    { upstream: https://nvcr.io }
+
+web:
+  conda:
+    upstream: https://conda.anaconda.org
+    revalidate: ['repodata.*\.json$', 'current_repodata\.json$']
+    no_cache: ['/$', '\.html$']
+  torch:
+    upstream: https://download.pytorch.org
+    no_cache: ['/$', '\.html$']
+  goproxy:
+    upstream: https://proxy.golang.org
+    no_cache: ['/@latest$', '/@v/list$']
+  npm:
+    upstream: https://registry.npmjs.org
+    revalidate: ['(?<!\.tgz)$']
+  hf:
+    upstream: https://huggingface.co
+    no_cache: ['^/api/']
+
+github:
+  enabled: true
+  # token_aliases: { team: ${GITHUB_PAT} }
+
+apt:
+  enabled: true
+  scheme: https
+
+pypi:
+  enabled: true

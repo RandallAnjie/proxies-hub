@@ -13,8 +13,36 @@ from __future__ import annotations
 import logging
 import time
 from collections import Counter, deque
+from pathlib import Path
 
 from aiohttp import web
+
+_STATIC = Path(__file__).parent / "static"
+
+
+def _render_dashboard(cfg) -> str:
+    """Load the bundled dashboard template and substitute branding placeholders
+    so a single image serves any domain — set PROXYHUB_DOMAIN/FOOTER/BRAND."""
+    try:
+        html = (_STATIC / "dashboard.html").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ("<!doctype html><meta charset=utf-8><title>proxyhub</title>"
+                "<h1>proxyhub</h1><p>dashboard template not found</p>")
+    domain = cfg.domain
+    if "." in domain:
+        head, _, tail = domain.partition(".")
+        brand_html = f'{head}<span class="dot">.</span>{tail}'
+    else:
+        brand_html = domain
+    # footer is FIXED (never configurable): project link + Powered By Randall
+    left = ('<a class="dom" href="https://github.com/RandallAnjie/proxies-hub" '
+            'target="_blank" rel="noopener">github.com/RandallAnjie/proxies-hub</a>')
+    right = 'Powered By <span class="blink">Randall</span>'
+    return (html
+            .replace("__BRAND_HTML__", brand_html)
+            .replace("__FOOTERR__", right)   # before __FOOTER__ (prefix collision)
+            .replace("__FOOTER__", left)
+            .replace("__DOMAIN__", domain))
 
 from . import upstream
 from .cache import DiskCache
@@ -63,11 +91,13 @@ def build_app(cfg: Config) -> web.Application:
     if cfg.pypi.enabled:
         routes[f"pypi.{cfg.domain}"] = PyPIProxy(cache)
     routes[f"cache.{cfg.domain}"] = GenericCacheProxy(cache)
+    dashboard_html = _render_dashboard(cfg)
+    dash_host = f"dash.{cfg.domain}"
 
     async def dispatch(request: web.Request) -> web.StreamResponse:
         if request.path == "/healthz":
             return web.json_response({"ok": True, "routes": sorted(routes)})
-        if request.path == "/status":
+        if request.path in ("/status", "/phstatus"):
             sample()
             return web.json_response({
                 "uptime": int(time.time() - started),
@@ -81,6 +111,10 @@ def build_app(cfg: Config) -> web.Application:
         host = request.host.split(":")[0]
         proxy = routes.get(host)
         if proxy is None:
+            # serve the dashboard at the dash host, or at "/" of any unknown host
+            # (so a bare `docker run -p 8080:8080` lands on a working page)
+            if host == dash_host or request.path == "/":
+                return web.Response(text=dashboard_html, content_type="text/html")
             return web.Response(status=404, text=f"no route for host: {host}\n")
         reqs[host] += 1
         try:

@@ -82,12 +82,14 @@ class Config:
     def load(cls, path: str) -> "Config":
         raw = yaml.safe_load(Path(path).read_text()) or {}
         c = cls()
-        c.host = raw.get("host", c.host)
-        c.port = int(raw.get("port", c.port))
-        c.domain = raw.get("domain", c.domain)
+        # every scalar below: env (PROXYHUB_*) overrides yaml overrides default,
+        # so a plain `docker run -e PROXYHUB_DOMAIN=example.com` works out of box
+        c.host = _envstr("PROXYHUB_HOST", raw.get("host", c.host))
+        c.port = int(_envstr("PROXYHUB_PORT", raw.get("port", c.port)))
+        c.domain = _envstr("PROXYHUB_DOMAIN", raw.get("domain", c.domain))
         cache = raw.get("cache", {})
-        c.cache_dir = cache.get("dir", c.cache_dir)
-        c.cache_max_bytes = _bytes(cache.get("max_size", c.cache_max_bytes))
+        c.cache_dir = _envstr("PROXYHUB_CACHE_DIR", cache.get("dir", c.cache_dir))
+        c.cache_max_bytes = _bytes(_envstr("PROXYHUB_CACHE_MAX", cache.get("max_size", c.cache_max_bytes)))
         c.cache_protect_window = int(cache.get("protect_window", c.cache_protect_window))
         c.cache_low_water = float(cache.get("low_water", c.cache_low_water))
         c.cache_pin = list(cache.get("pin", []))
@@ -120,3 +122,9 @@ def _env(v: str) -> str:
     if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
         return os.environ.get(v[2:-1], "")
     return v
+
+
+def _envstr(name: str, default):
+    """Env var `name` wins if set (and non-empty), else the yaml/default value."""
+    v = os.environ.get(name)
+    return v if v not in (None, "") else default

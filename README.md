@@ -45,15 +45,34 @@ slow client can never cause an upstream connection to time out mid-transfer.
 
 ## Run
 
+Out of the box — a baked default config means just a domain is enough:
+
 ```bash
-pip install -r requirements.txt        # aiohttp, PyYAML
-cp config.example.yaml config.yaml     # edit upstreams; secrets via ${ENV}
-GHCR_USER=… GHCR_PAT=… GITHUB_PAT=… PYTHONPATH=src python -m proxyhub -c config.yaml
-# or: docker build -t proxyhub . && docker run -p 8080:8080 -v cache:/var/cache/proxyhub proxyhub
+docker build -t proxyhub .
+docker run -p 8080:8080 -v cache:/var/cache/proxyhub \
+  -e PROXYHUB_DOMAIN=example.com proxyhub
 ```
 
-It speaks plain HTTP on `:8080` — put it behind Caddy/nginx for TLS, exactly
-like the rest of the stack. Routing is by `Host` header.
+That serves the **dashboard** at `/` (and at `dash.example.com`), `/status`
+JSON metrics, and every proxy host (`hub.docker.example.com`, `pypi.example.com`,
+…). Mount your own `/app/config.yaml` to change upstreams/credentials; override
+scalars via env without touching the file:
+
+| env | overrides | default |
+| --- | --- | --- |
+| `PROXYHUB_DOMAIN` | host suffix the dashboard + routing use | `example.com` |
+| `PROXYHUB_CACHE_MAX` | cache cap (e.g. `250g`) | `50g` |
+| `PROXYHUB_HOST` / `PROXYHUB_PORT` | bind address | `0.0.0.0:8080` |
+| `PROXYHUB_CACHE_DIR` | cache directory | `/var/cache/proxyhub` |
+
+The footer (project link + "Powered By Randall") is fixed and not configurable.
+
+From source: `pip install -r requirements.txt && PYTHONPATH=src python -m proxyhub -c config.yaml`
+(secrets like `${GHCR_PAT}` / `${GITHUB_PAT}` are read from the environment).
+
+It speaks **plain HTTP** on `:8080` and does **not** manage TLS — put your own
+reverse proxy (Caddy/nginx/Traefik) in front for certificates. Routing is by
+`Host` header; the dashboard also answers `/` on any unmatched host.
 
 ### Examples
 ```bash
