@@ -18,7 +18,7 @@ from aiohttp import web
 from ..cache import DiskCache
 from ..config import DockerRegistry
 from ..upstream import session
-from .base import parse_range, ranged_upstream_filler, send, upstream_filler
+from .base import parse_range, proxy, ranged_upstream_filler, send, upstream_filler
 
 _BLOB = re.compile(r"^/v2/.+/blobs/sha256:[0-9a-f]{64}$")
 _BEARER = re.compile(r'(\w+)="([^"]*)"')

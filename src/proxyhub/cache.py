@@ -46,10 +46,16 @@ class _Download:
 
     def notify(self):
         self._event.set()
-        self._event = asyncio.Event()
 
     async def wait(self):
-        await self._event.wait()
+        # Timeout makes this self-heal against a missed wakeup (a notify that
+        # fires between a reader's state-check and its await): the reader re-checks
+        # dl.size every 0.1s at worst. Clear-after-wait keeps it edge-triggered.
+        try:
+            await asyncio.wait_for(self._event.wait(), 0.1)
+        except asyncio.TimeoutError:
+            pass
+        self._event.clear()
 
 
 class DiskCache:
@@ -166,6 +172,11 @@ class DiskCache:
             return await self._passthrough(filler)
         dl = await self._begin(key, filler)
         await self._await_meta(dl)
+        # If the upstream advertised a full length, emit it as Content-Length.
+        # Docker/containerd require a known blob size; a chunked (length-less)
+        # response makes it distrust the stream and reconnect/retry endlessly.
+        if dl.meta.total is not None and dl.meta.total >= 0:
+            dl.meta.size = dl.meta.total
         return dl.meta, self._read_inflight(key, dl, 0, None)
 
     # ---- streaming (range) ----
