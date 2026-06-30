@@ -29,7 +29,10 @@ log = logging.getLogger("proxyhub")
 
 
 def build_app(cfg: Config) -> web.Application:
-    cache = DiskCache(cfg.cache_dir, cfg.cache_max_bytes)
+    cache = DiskCache(cfg.cache_dir, cfg.cache_max_bytes,
+                      protect_window=cfg.cache_protect_window,
+                      low_water_ratio=cfg.cache_low_water,
+                      pin_patterns=cfg.cache_pin)
     routes: dict[str, object] = {}
     reqs: Counter = Counter()
     started = time.time()

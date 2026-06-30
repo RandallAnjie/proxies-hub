@@ -119,11 +119,15 @@ class DockerProxy:
         # network can't keep one connection open past the upstream's cut window.
         if method == "GET" and is_blob:
             filler = ranged_upstream_filler(url, headers)
+            # the blob's content address IS its sha256 — verify the filled bytes
+            # against it so a truncated/corrupt fetch is never committed to cache
+            vfy = digest.split(":", 1)[1] if digest.startswith("sha256:") else None
             rng = parse_range(request)
             if rng:
-                meta, chunks = await self.cache.stream_range(key, rng[0], rng[1], filler, cacheable=True)
+                meta, chunks = await self.cache.stream_range(
+                    key, rng[0], rng[1], filler, cacheable=True, verify=vfy)
             else:
-                meta, chunks = await self.cache.stream(key, filler, cacheable=True)
+                meta, chunks = await self.cache.stream(key, filler, cacheable=True, verify=vfy)
             return await send(request, meta, chunks)
         if "Range" in request.headers:
             headers["Range"] = request.headers["Range"]

@@ -19,6 +19,17 @@ slow client can never cause an upstream connection to time out mid-transfer.
 ### Highlights
 - **Decoupled buffering cache** (`cache.py`): upstream fetch paced by the server,
   not the client; concurrent readers share one fill; LRU eviction by size.
+- **Digest integrity** (`cache.py`): a docker blob is hashed while it fills and
+  the sha256 is checked against its content-addressed digest before commit — a
+  truncated or corrupt fetch is rejected, never cached, never re-served.
+- **Smart eviction** (`cache.py`): LRU down to a low-water mark (no boundary
+  thrash); entries used within `protect_window` are evicted only as a last
+  resort (a burst of small files can't push out a hot large layer); `pin`
+  regexes are never evicted.
+- **Conditional revalidation** (`webcache.py`): `revalidate` indexes (conda
+  repodata, npm metadata) are cached *with* their ETag/Last-Modified and served
+  on a `304` — fresh like `no_cache`, but an unchanged (often large) index is not
+  re-downloaded.
 - **Chunked ("ranged") upstream fetch** (`base.py`): a large blob is pulled from
   upstream in sequential 128 MB `Range` chunks, so no single upstream connection
   stays open long enough to be cut — ghcr/CDNs drop slow long-lived fetches at

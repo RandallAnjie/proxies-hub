@@ -14,12 +14,17 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
 CHUNK = 256 * 1024
+
+
+class IntegrityError(Exception):
+    """A filled object failed its expected-digest check; it is not cached."""
 
 
 @dataclass
@@ -59,10 +64,21 @@ class _Download:
 
 
 class DiskCache:
-    def __init__(self, root: str, max_bytes: int):
+    def __init__(self, root: str, max_bytes: int, protect_window: int = 600,
+                 low_water_ratio: float = 0.92, pin_patterns: Optional[list] = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.max_bytes = max_bytes
+        # evict down to this low-water mark (not just to the cap) to avoid
+        # thrashing right at the boundary
+        self.low_water = int(max_bytes * low_water_ratio)
+        # entries touched within this many seconds are evicted only as a last
+        # resort, so a burst of small files can't push out a hot large layer
+        self.protect_window = protect_window
+        # keys matching any of these are never evicted (e.g. base images)
+        self._pins = [re.compile(p) for p in (pin_patterns or [])]
+        self.verify_failures = 0
+        self.revalidations = 0
         self._inflight: dict[str, _Download] = {}
         self._lock = asyncio.Lock()
         # metrics
@@ -138,6 +154,9 @@ class DiskCache:
             e["atime"] = time.time()
             self._flush()
 
+    def _is_pinned(self, key: str) -> bool:
+        return bool(key) and any(p.search(key) for p in self._pins)
+
     def stats(self) -> dict:
         total_req = self.hits + self.misses
         return {
@@ -147,6 +166,9 @@ class DiskCache:
             "bytes_served": self.bytes_served,
             "cache_bytes": self._total, "cache_max": self.max_bytes,
             "cache_files": len(self._index),
+            "verify_failures": self.verify_failures,
+            "revalidations": self.revalidations,
+            "pins": len(self._pins),
         }
 
     # ---- lookup ----
@@ -161,8 +183,20 @@ class DiskCache:
                 return None
         return None
 
+    def peek(self, key: str) -> Optional[CacheMeta]:
+        """Like lookup but without touching atime or hit/miss counters — used by
+        revalidation to read a cached entry's stored validators (ETag/Date)."""
+        data_p, meta_p, _ = self._paths(key)
+        if data_p.exists() and meta_p.exists():
+            try:
+                return CacheMeta(**json.loads(meta_p.read_text()))
+            except Exception:
+                return None
+        return None
+
     # ---- streaming (full) ----
-    async def stream(self, key: str, filler: Filler, cacheable: bool = True):
+    async def stream(self, key: str, filler: Filler, cacheable: bool = True,
+                     verify: Optional[str] = None):
         meta = self.lookup(key)
         if meta is not None:
             self.hits += 1
@@ -170,7 +204,7 @@ class DiskCache:
         self.misses += 1
         if not cacheable:
             return await self._passthrough(filler)
-        dl = await self._begin(key, filler)
+        dl = await self._begin(key, filler, verify=verify)
         await self._await_meta(dl)
         # If the upstream advertised a full length, emit it as Content-Length.
         # Docker/containerd require a known blob size; a chunked (length-less)
@@ -181,7 +215,8 @@ class DiskCache:
 
     # ---- streaming (range) ----
     async def stream_range(self, key: str, start: int, end: Optional[int],
-                           filler: Filler, cacheable: bool = True):
+                           filler: Filler, cacheable: bool = True,
+                           verify: Optional[str] = None):
         """Serve bytes [start, end]. Returns (206-meta, iterator)."""
         meta = self.lookup(key)
         if meta is not None:
@@ -194,7 +229,7 @@ class DiskCache:
         self.misses += 1
         if not cacheable:
             return await self._passthrough(filler)  # let upstream handle range
-        dl = await self._begin(key, filler)
+        dl = await self._begin(key, filler, verify=verify)
         await self._await_meta(dl)
         total = dl.meta.total
         if total is None or total < 0:
@@ -203,6 +238,70 @@ class DiskCache:
         real_end = total - 1 if end is None or end >= total else end
         m = self._range_meta(dl.meta, start, real_end, total)
         return m, self._read_inflight(key, dl, start, real_end)
+
+    # ---- conditional revalidation (indexes) ----
+    async def stream_revalidate(self, key: str, filler: Filler,
+                                cached: CacheMeta, verify: Optional[str] = None):
+        """For a cached entry with validators: run a conditional upstream request
+        (the ``filler`` must carry If-None-Match / If-Modified-Since). If upstream
+        answers ``304`` serve the cached body; otherwise stream + re-cache the new
+        body. Keeps indexes fresh without re-downloading unchanged ones."""
+        self.revalidations += 1
+        gen = filler()
+        meta, first = await gen.__anext__()
+        if meta is None:
+            raise RuntimeError("filler must yield metadata first")
+        if meta.status == 304:
+            async for _ in gen:    # drain (no body, but release the connection)
+                pass
+            self.hits += 1
+            self._bump(key)
+            return cached, self._read_file(key, 0, cached.size - 1)
+
+        # changed (200, or anything else) — stream to the client while writing a
+        # fresh copy, then atomically replace the cached entry.
+        self.misses += 1
+        meta.key = key
+        if meta.total is not None and meta.total >= 0:
+            meta.size = meta.total
+        data_p, meta_p, part_p = self._paths(key)
+        rv = part_p.with_name(part_p.name + ".rv")
+        rv.parent.mkdir(parents=True, exist_ok=True)
+
+        async def body():
+            h = hashlib.sha256() if verify else None
+            size = 0
+            try:
+                with open(rv, "wb") as f:
+                    if first:
+                        f.write(first); size += len(first)
+                        if h:
+                            h.update(first)
+                        self.bytes_served += len(first)
+                        yield first
+                    async for _, c in gen:
+                        if not c:
+                            continue
+                        f.write(c); size += len(c)
+                        if h:
+                            h.update(c)
+                        self.bytes_served += len(c)
+                        yield c
+                if h is not None and h.hexdigest() != verify:
+                    self.verify_failures += 1
+                    rv.unlink(missing_ok=True)
+                    return
+                m = CacheMeta(key=key, size=size, content_type=meta.content_type,
+                              status=200, total=size, extra_headers=meta.extra_headers)
+                os.replace(rv, data_p)
+                meta_p.write_text(json.dumps(m.__dict__))
+                self._record(key, size)
+                await self._enforce_limit()
+            except BaseException:
+                rv.unlink(missing_ok=True)
+                raise
+
+        return meta, body()
 
     def _range_meta(self, base: CacheMeta, start: int, end: int, total: int) -> CacheMeta:
         hdr = dict(base.extra_headers)
@@ -237,7 +336,8 @@ class DiskCache:
 
         return meta, it()
 
-    async def _begin(self, key: str, filler: Filler) -> _Download:
+    async def _begin(self, key: str, filler: Filler,
+                     verify: Optional[str] = None) -> _Download:
         async with self._lock:
             dl = self._inflight.get(key)
             if dl is not None:
@@ -246,11 +346,16 @@ class DiskCache:
             part_p.parent.mkdir(parents=True, exist_ok=True)
             dl = _Download(part_p)
             self._inflight[key] = dl
-            asyncio.create_task(self._fill(key, filler, dl))
+            asyncio.create_task(self._fill(key, filler, dl, verify))
             return dl
 
-    async def _fill(self, key: str, filler: Filler, dl: _Download):
+    async def _fill(self, key: str, filler: Filler, dl: _Download,
+                    verify: Optional[str] = None):
         data_p, meta_p, part_p = self._paths(key)
+        # the decoupled buffer always fills the WHOLE object from offset 0
+        # (regardless of any client Range), so a running sha256 over the written
+        # bytes can be checked against the expected digest before we commit.
+        h = hashlib.sha256() if verify else None
         try:
             gen = filler()
             meta, first = await gen.__anext__()
@@ -261,6 +366,8 @@ class DiskCache:
                 if first:
                     f.write(first)
                     dl.size = len(first)
+                    if h:
+                        h.update(first)
                 dl.meta = meta
                 dl.notify()
                 async for _, chunk in gen:
@@ -268,7 +375,13 @@ class DiskCache:
                         continue
                     f.write(chunk)
                     dl.size += len(chunk)
+                    if h:
+                        h.update(chunk)
                     dl.notify()
+            if h is not None and h.hexdigest() != verify:
+                self.verify_failures += 1
+                raise IntegrityError(
+                    f"sha256 mismatch for {key}: got {h.hexdigest()[:16]} want {verify[:16]}")
             meta.size = dl.size
             meta.total = dl.size
             os.replace(part_p, data_p)
@@ -341,18 +454,37 @@ class DiskCache:
                 self.bytes_served += len(chunk)
                 yield chunk
 
+    def _evict(self, digest: str, e: dict):
+        sub = self.root / digest[:2] / digest[2:4]
+        try:
+            (sub / digest).unlink(missing_ok=True)
+            (sub / (digest + ".meta")).unlink(missing_ok=True)
+        except Exception:
+            pass
+        self._total -= e["size"]
+        self._index.pop(digest, None)
+
     async def _enforce_limit(self):
+        """LRU eviction down to the low-water mark, with two refinements:
+        pinned entries are never evicted, and entries touched within the protect
+        window are evicted only as a last resort (so a burst of small files
+        cannot push out a hot large layer)."""
         if self._total <= self.max_bytes:
             return
-        for digest, e in sorted(self._index.items(), key=lambda kv: kv[1]["atime"]):
-            if self._total <= self.max_bytes:
+        now = time.time()
+        ordered = sorted(self._index.items(), key=lambda kv: kv[1]["atime"])
+        # pass 1: evict cold (older than protect window); pass 2: allow recent too
+        for allow_recent in (False, True):
+            for digest, e in ordered:
+                if self._total <= self.low_water:
+                    break
+                if digest not in self._index:
+                    continue
+                if self._is_pinned(e.get("key", "")):
+                    continue
+                if not allow_recent and (now - e["atime"]) < self.protect_window:
+                    continue
+                self._evict(digest, e)
+            if self._total <= self.low_water:
                 break
-            sub = self.root / digest[:2] / digest[2:4]
-            try:
-                (sub / digest).unlink(missing_ok=True)
-                (sub / (digest + ".meta")).unlink(missing_ok=True)
-            except Exception:
-                pass
-            self._total -= e["size"]
-            self._index.pop(digest, None)
         self._flush(force=True)

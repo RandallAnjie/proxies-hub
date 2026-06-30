@@ -37,6 +37,10 @@ class WebMirror:
     upstream: str            # e.g. https://conda.anaconda.org
     # request-uri regexes that should NOT be cached (kept fresh)
     no_cache: list[str] = field(default_factory=list)
+    # request-uri regexes cached WITH conditional revalidation (ETag/If-Modified
+    # -Since): fresh like no_cache but served from disk on a 304. Takes priority
+    # over no_cache. Ideal for big-but-rarely-changing indexes (conda repodata).
+    revalidate: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -63,6 +67,9 @@ class Config:
     port: int = 8080
     cache_dir: str = "/var/cache/proxyhub"
     cache_max_bytes: int = 100 * 1024**3
+    cache_protect_window: int = 600      # recently-used entries protected (s)
+    cache_low_water: float = 0.92        # evict down to this fraction of max
+    cache_pin: list = field(default_factory=list)   # regexes never evicted
     # host suffix the proxy serves under, used to route by Host header
     domain: str = "proxies.live"
     docker: dict[str, DockerRegistry] = field(default_factory=dict)
@@ -81,6 +88,9 @@ class Config:
         cache = raw.get("cache", {})
         c.cache_dir = cache.get("dir", c.cache_dir)
         c.cache_max_bytes = _bytes(cache.get("max_size", c.cache_max_bytes))
+        c.cache_protect_window = int(cache.get("protect_window", c.cache_protect_window))
+        c.cache_low_water = float(cache.get("low_water", c.cache_low_water))
+        c.cache_pin = list(cache.get("pin", []))
         for name, d in (raw.get("docker") or {}).items():
             c.docker[name] = DockerRegistry(
                 name=name, upstream=d["upstream"],
@@ -92,6 +102,7 @@ class Config:
             c.web[name] = WebMirror(
                 name=name, upstream=w["upstream"],
                 no_cache=list(w.get("no_cache", [])),
+                revalidate=list(w.get("revalidate", [])),
             )
         gh = raw.get("github") or {}
         c.github = GitHubCfg(

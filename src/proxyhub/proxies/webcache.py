@@ -13,7 +13,7 @@ from aiohttp import web
 
 from ..cache import DiskCache
 from ..config import WebMirror
-from .base import proxy
+from .base import proxy, send, upstream_filler
 
 
 class WebCacheProxy:
@@ -23,9 +23,13 @@ class WebCacheProxy:
         self.upstream = mirror.upstream.rstrip("/")
         self.host = urlsplit(self.upstream).netloc
         self._no_cache = [re.compile(p) for p in mirror.no_cache]
+        self._revalidate = [re.compile(p) for p in mirror.revalidate]
 
     def _cacheable(self, path: str) -> bool:
         return not any(p.search(path) for p in self._no_cache)
+
+    def _revalidatable(self, path: str) -> bool:
+        return any(p.search(path) for p in self._revalidate)
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
         path = request.raw_path
@@ -33,8 +37,28 @@ class WebCacheProxy:
         headers = {"User-Agent": "proxyhub-web", "Host": self.host}
         if "Accept" in request.headers:
             headers["Accept"] = request.headers["Accept"]
-        cacheable = request.method == "GET" and self._cacheable(path)
         key = f"web:{self.mirror.name}:{path}"
+
+        # indexes: cache WITH conditional revalidation (fresh, but a 304 avoids
+        # re-downloading an unchanged — often large — index)
+        if request.method == "GET" and self._revalidatable(path):
+            cached = self.cache.peek(key)
+            if cached is not None:
+                cond = dict(headers)
+                et = cached.extra_headers.get("ETag") or cached.extra_headers.get("Etag")
+                lm = cached.extra_headers.get("Last-Modified")
+                if et:
+                    cond["If-None-Match"] = et
+                if lm:
+                    cond["If-Modified-Since"] = lm
+                if et or lm:
+                    filler = upstream_filler("GET", url, cond)
+                    meta, chunks = await self.cache.stream_revalidate(key, filler, cached)
+                    return await send(request, meta, chunks)
+            # first sight (or no validators stored): cache it, validators and all
+            return await proxy(request, self.cache, key, "GET", url, headers, True)
+
+        cacheable = request.method == "GET" and self._cacheable(path)
         return await proxy(request, self.cache, key, request.method, url, headers, cacheable)
 
 

@@ -1,5 +1,6 @@
 """Smoke tests for the decoupled buffering cache."""
 import asyncio
+import hashlib
 import tempfile
 
 from proxyhub.cache import CacheMeta, DiskCache
@@ -130,5 +131,96 @@ def test_passthrough_not_cached():
             meta, chunks = await c.stream("x", _filler(b"abc"), cacheable=False)
             assert await _collect(chunks) == b"abc"
             assert c.lookup("x") is None
+
+    asyncio.run(go())
+
+
+def _filler_meta(data: bytes, status: int = 200, headers=None, chunk: int = 64):
+    def gen():
+        async def g():
+            total = len(data) if status == 200 else -1
+            yield CacheMeta(key="", size=-1, total=total, content_type="application/json",
+                            status=status, extra_headers=dict(headers or {})), b""
+            if status != 304:
+                for i in range(0, len(data), chunk):
+                    await asyncio.sleep(0)
+                    yield None, data[i:i + chunk]
+        return g()
+    return gen
+
+
+def test_digest_verify_good_and_bad():
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9)
+            payload = b"layer-bytes-" * 500
+            good = hashlib.sha256(payload).hexdigest()
+
+            _, it = await c.stream("blob:good", _filler(payload), verify=good)
+            assert await _collect(it) == payload
+            assert c.lookup("blob:good") is not None          # verified -> cached
+
+            raised = False
+            try:
+                _, it2 = await c.stream("blob:bad", _filler(payload), verify="0" * 64)
+                await _collect(it2)
+            except Exception:
+                raised = True
+            assert raised
+            assert c.lookup("blob:bad") is None               # mismatch -> not cached
+            assert c.stats()["verify_failures"] == 1
+
+    asyncio.run(go())
+
+
+def test_revalidate_304_and_200():
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9)
+            v1 = b'{"pkg":1}' * 100
+            _, it = await c.stream("idx", _filler_meta(v1, headers={"ETag": '"v1"'}))
+            assert await _collect(it) == v1
+            cached = c.peek("idx")
+            assert cached.extra_headers.get("ETag") == '"v1"'
+
+            # 304 -> serve the cached body unchanged
+            meta, ch = await c.stream_revalidate("idx", _filler_meta(b"", status=304), cached)
+            assert await _collect(ch) == v1
+
+            # 200 -> stream + re-cache the new body
+            v2 = b'{"pkg":2}' * 130
+            _, ch2 = await c.stream_revalidate(
+                "idx", _filler_meta(v2, headers={"ETag": '"v2"'}), cached)
+            assert await _collect(ch2) == v2
+            _, again = await c.stream("idx", _filler_meta(b"NOPE"))
+            assert await _collect(again) == v2
+            assert c.peek("idx").extra_headers.get("ETag") == '"v2"'
+            assert c.stats()["revalidations"] == 2
+
+    asyncio.run(go())
+
+
+def test_pinned_never_evicted():
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=2000, protect_window=0, pin_patterns=[r"^pinned:"])
+            await _collect((await c.stream("pinned:keep", _filler(b"P" * 800)))[1])
+            for i in range(8):                       # churn past the cap
+                await _collect((await c.stream(f"x{i}", _filler(b"y" * 500)))[1])
+            assert c.lookup("pinned:keep") is not None    # pin survives eviction
+            assert c.stats()["cache_bytes"] <= c.max_bytes
+
+    asyncio.run(go())
+
+
+def test_protect_window_is_last_resort():
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            # everything stays "recent" (huge window) but cache still bounded:
+            # pass 2 evicts protected entries when nothing cold remains
+            c = DiskCache(d, max_bytes=1500, protect_window=10**6)
+            for i in range(8):
+                await _collect((await c.stream(f"e{i}", _filler(b"z" * 500)))[1])
+            assert c.stats()["cache_bytes"] <= c.max_bytes
 
     asyncio.run(go())

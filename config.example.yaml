@@ -6,6 +6,10 @@ domain: proxies.live
 cache:
   dir: /var/cache/proxyhub
   max_size: 100g
+  protect_window: 600     # entries used in the last N seconds are evicted last
+  low_water: 0.92         # when over max, evict down to this fraction (no thrash)
+  pin:                    # regexes for cache keys that are never evicted
+    - 'docker:hub:/v2/library/'   # e.g. keep Docker Hub base images hot
 
 docker:
   hub:
@@ -27,9 +31,10 @@ docker:
 web:
   conda:
     upstream: https://conda.anaconda.org
-    no_cache:
+    revalidate:             # cached + ETag-revalidated (fresh, 304 = no re-download)
       - 'repodata.*\.json$'
       - 'current_repodata\.json$'
+    no_cache:
       - '/$'
   torch:
     upstream: https://download.pytorch.org
