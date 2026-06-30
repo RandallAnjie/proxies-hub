@@ -92,6 +92,11 @@ class DockerProxy:
 
     async def handle(self, request: web.Request) -> web.StreamResponse:
         path = request.path  # e.g. /v2/library/nginx/manifests/latest
+        # /v2/ ping: answer locally (this proxy fronts auth; clients auth to us
+        # via the reverse proxy's basic-auth, we handle the upstream token flow).
+        if path in ("/v2", "/v2/"):
+            return web.Response(status=200, headers={
+                "Docker-Distribution-Api-Version": "registry/2.0", "X-Proxyhub": "1"})
         url = self.reg.upstream.rstrip("/") + path
         method = request.method
         is_blob = bool(_BLOB.match(path))
