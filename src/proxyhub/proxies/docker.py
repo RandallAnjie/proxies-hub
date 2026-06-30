@@ -18,7 +18,7 @@ from aiohttp import web
 from ..cache import DiskCache
 from ..config import DockerRegistry
 from ..upstream import session
-from .base import proxy, send, upstream_filler
+from .base import parse_range, ranged_upstream_filler, send, upstream_filler
 
 _BLOB = re.compile(r"^/v2/.+/blobs/sha256:[0-9a-f]{64}$")
 _BEARER = re.compile(r'(\w+)="([^"]*)"')
@@ -115,9 +115,16 @@ class DockerProxy:
 
         headers = await self._authorized_headers(url, request.headers.get("Accept", "*/*"))
 
-        # blobs: cache by digest (Range-aware); manifests/tags/HEAD: live passthrough
+        # blob GET (uncached): fetch from upstream in Range chunks so a slow
+        # network can't keep one connection open past the upstream's cut window.
         if method == "GET" and is_blob:
-            return await proxy(request, self.cache, key, "GET", url, headers, cacheable=True)
+            filler = ranged_upstream_filler(url, headers)
+            rng = parse_range(request)
+            if rng:
+                meta, chunks = await self.cache.stream_range(key, rng[0], rng[1], filler, cacheable=True)
+            else:
+                meta, chunks = await self.cache.stream(key, filler, cacheable=True)
+            return await send(request, meta, chunks)
         if "Range" in request.headers:
             headers["Range"] = request.headers["Range"]
         filler = upstream_filler(method, url, headers)

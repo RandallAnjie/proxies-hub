@@ -71,6 +71,63 @@ def upstream_filler(method: str, url: str, headers: dict,
     return gen
 
 
+def ranged_upstream_filler(url: str, headers: dict, chunk: int = 128 * 1024 * 1024):
+    """Fetch a large object in sequential ``Range`` chunks, so no single upstream
+    connection stays open long enough to be cut (ghcr/CDNs drop slow long-lived
+    fetches). Reassembles into one logical stream. Falls back to a single full
+    stream if the upstream ignores Range."""
+
+    async def gen() -> AsyncIterator[tuple[Optional[CacheMeta], bytes]]:
+        pos = 0
+        total: Optional[int] = None
+        first = True
+        while total is None or pos < total:
+            h = dict(headers)
+            h["Range"] = f"bytes={pos}-{pos + chunk - 1}"
+            cur_url, cur_headers = url, h
+            resp = None
+            for _ in range(6):
+                resp = await session().get(cur_url, headers=cur_headers, allow_redirects=False)
+                loc = resp.headers.get("Location")
+                if resp.status in _REDIRECT and loc:
+                    await resp.release()
+                    nxt = urljoin(cur_url, loc)
+                    if urlsplit(nxt).netloc != urlsplit(cur_url).netloc:
+                        cur_headers = {k: v for k, v in cur_headers.items()
+                                       if k.lower() not in ("authorization", "host")}
+                    cur_url = nxt
+                    continue
+                break
+            if first:
+                first = False
+                if resp.status == 206:
+                    cr = resp.headers.get("Content-Range", "")
+                    total = int(cr.rsplit("/", 1)[1]) if "/" in cr else -1
+                else:
+                    total = -1   # upstream ignored Range -> single response
+                keep = {k: v for k, v in resp.headers.items()
+                        if k.lower() not in _HOP and k.lower() != "content-range"}
+                yield CacheMeta(
+                    key="", size=-1, total=(total if total and total > 0 else -1),
+                    content_type=resp.headers.get("Content-Type", "application/octet-stream"),
+                    status=(resp.status if resp.status >= 400 else 200),
+                    extra_headers=keep), b""
+                if total is None or total < 0:
+                    async for c in resp.content.iter_chunked(CHUNK):
+                        yield None, c
+                    await resp.release()
+                    return
+            elif resp.status not in (200, 206):
+                await resp.release()
+                raise RuntimeError(f"range chunk {pos} failed: {resp.status}")
+            async for c in resp.content.iter_chunked(CHUNK):
+                yield None, c
+            await resp.release()
+            pos += chunk
+
+    return gen
+
+
 async def send(request: web.Request, meta: CacheMeta,
                chunks: AsyncIterator[bytes]) -> web.StreamResponse:
     if request.method == "HEAD":
