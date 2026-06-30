@@ -71,32 +71,50 @@ def upstream_filler(method: str, url: str, headers: dict,
     return gen
 
 
-def ranged_upstream_filler(url: str, headers: dict, chunk: int = 128 * 1024 * 1024):
+def ranged_upstream_filler(url: str, headers: dict, chunk: int = 128 * 1024 * 1024,
+                           reauth=None):
     """Fetch a large object in sequential ``Range`` chunks, so no single upstream
     connection stays open long enough to be cut (ghcr/CDNs drop slow long-lived
     fetches). Reassembles into one logical stream. Falls back to a single full
-    stream if the upstream ignores Range."""
+    stream if the upstream ignores Range.
+
+    ``reauth`` (optional ``async () -> dict``) is called when the *origin*
+    answers ``401`` mid-transfer — a token that expired during a long fetch. The
+    fresh auth headers are adopted and the *same* chunk is retried, so a download
+    that outlives the token continues from where it was rather than restarting."""
 
     async def gen() -> AsyncIterator[tuple[Optional[CacheMeta], bytes]]:
         pos = 0
         total: Optional[int] = None
         first = True
+        auth = dict(headers)                 # refreshed in place on a 401
         while total is None or pos < total:
-            h = dict(headers)
-            h["Range"] = f"bytes={pos}-{pos + chunk - 1}"
-            cur_url, cur_headers = url, h
             resp = None
-            for _ in range(6):
-                resp = await session().get(cur_url, headers=cur_headers, allow_redirects=False)
-                loc = resp.headers.get("Location")
-                if resp.status in _REDIRECT and loc:
+            reauthed = 0
+            while True:                      # one chunk: redirect-follow + reauth
+                h = dict(auth)
+                h["Range"] = f"bytes={pos}-{pos + chunk - 1}"
+                cur_url, cur_headers = url, h
+                for _ in range(6):
+                    resp = await session().get(cur_url, headers=cur_headers, allow_redirects=False)
+                    loc = resp.headers.get("Location")
+                    if resp.status in _REDIRECT and loc:
+                        await resp.release()
+                        nxt = urljoin(cur_url, loc)
+                        if urlsplit(nxt).netloc != urlsplit(cur_url).netloc:
+                            cur_headers = {k: v for k, v in cur_headers.items()
+                                           if k.lower() not in ("authorization", "host")}
+                        cur_url = nxt
+                        continue
+                    break
+                # token expired at the origin -> refresh once or twice, retry pos
+                if resp.status == 401 and reauth and reauthed < 2:
                     await resp.release()
-                    nxt = urljoin(cur_url, loc)
-                    if urlsplit(nxt).netloc != urlsplit(cur_url).netloc:
-                        cur_headers = {k: v for k, v in cur_headers.items()
-                                       if k.lower() not in ("authorization", "host")}
-                    cur_url = nxt
-                    continue
+                    reauthed += 1
+                    fresh = await reauth()
+                    if fresh:
+                        auth.update(fresh)
+                        continue
                 break
             if first:
                 first = False

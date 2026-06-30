@@ -42,6 +42,9 @@ class _TokenCache:
     def put(self, scope: str, token: str, ttl: int = 240):
         self._toks[scope] = (token, time.time() + ttl)
 
+    def invalidate(self):
+        self._toks.clear()
+
 
 class DockerProxy:
     def __init__(self, reg: DockerRegistry, cache: DiskCache):
@@ -113,12 +116,18 @@ class DockerProxy:
                     return await send(request, cached, _empty())
                 return await proxy(request, self.cache, key, "GET", url, {}, cacheable=True)
 
-        headers = await self._authorized_headers(url, request.headers.get("Accept", "*/*"))
+        accept = request.headers.get("Accept", "*/*")
+        headers = await self._authorized_headers(url, accept)
 
         # blob GET (uncached): fetch from upstream in Range chunks so a slow
         # network can't keep one connection open past the upstream's cut window.
         if method == "GET" and is_blob:
-            filler = ranged_upstream_filler(url, headers)
+            async def _reauth():
+                # the token expired mid-fetch (a multi-GB layer on a slow link
+                # can outlive it) — drop the cached one and resolve a fresh token
+                self.tokens.invalidate()
+                return await self._authorized_headers(url, accept)
+            filler = ranged_upstream_filler(url, headers, reauth=_reauth)
             # the blob's content address IS its sha256 — verify the filled bytes
             # against it so a truncated/corrupt fetch is never committed to cache
             vfy = digest.split(":", 1)[1] if digest.startswith("sha256:") else None
