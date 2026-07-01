@@ -145,113 +145,7 @@
   </section>
 
 
-  <section class="reveal">
-    <div class="sechead"><span class="no">01</span><h2>Docker 镜像加速</h2><span class="hint">需 docker login</span></div>
-    <div class="codewrap"><pre><code>docker login hub.docker.__DOMAIN__ -u &lt;用户名&gt;
-docker pull hub.docker.__DOMAIN__/library/nginx</code></pre><button class="cp">copy</button></div>
-    <div class="grid">
-      <div class="cell"><a href="https://hub.docker.__DOMAIN__/v2/">hub</a><span class="u">docker.io</span></div>
-      <div class="cell"><a href="https://ghcr.docker.__DOMAIN__/v2/">ghcr</a><span class="u">ghcr.io</span></div>
-      <div class="cell"><a href="https://gcr.docker.__DOMAIN__/v2/">gcr</a><span class="u">gcr.io</span></div>
-      <div class="cell"><a href="https://k8s-gcr.docker.__DOMAIN__/v2/">k8s-gcr</a><span class="u">k8s.gcr.io</span></div>
-      <div class="cell"><a href="https://k8s.docker.__DOMAIN__/v2/">k8s</a><span class="u">registry.k8s.io</span></div>
-      <div class="cell"><a href="https://quay.docker.__DOMAIN__/v2/">quay</a><span class="u">quay.io</span></div>
-      <div class="cell"><a href="https://mcr.docker.__DOMAIN__/v2/">mcr</a><span class="u">mcr.microsoft.com</span></div>
-      <div class="cell"><a href="https://elastic.docker.__DOMAIN__/v2/">elastic</a><span class="u">docker.elastic.co</span></div>
-      <div class="cell"><a href="https://nvcr.docker.__DOMAIN__/v2/">nvcr</a><span class="u">nvcr.io</span></div>
-    </div>
-    <p class="note">用法：把上游域名换成对应子域名，例如 <code>ghcr.io/owner/img</code> → <code>ghcr.docker.__DOMAIN__/owner/img</code></p>
-  </section>
-
-  <section class="reveal">
-    <div class="sechead"><span class="no">02</span><h2>GitHub 加速</h2><span class="hint">免登录</span></div>
-    <div class="row"><span class="name">ghproxy</span><a class="dom" href="https://github.__DOMAIN__/">github.__DOMAIN__</a></div>
-    <div class="codewrap"><pre><code>git clone https://github.__DOMAIN__/https://github.com/&lt;用户&gt;/&lt;仓库&gt;
-wget https://github.__DOMAIN__/https://github.com/&lt;用户&gt;/&lt;仓库&gt;/releases/download/v1/x.zip</code></pre><button class="cp">copy</button></div>
-  </section>
-
-  <section class="reveal">
-    <div class="sechead"><span class="no">03</span><h2>语言 / AI 包加速</h2><span class="hint">免登录</span></div>
-    <div class="codewrap"><pre><code># npm
-npm config set registry https://npm.__DOMAIN__
-# pip
-pip config set global.index-url https://pypi.__DOMAIN__/index/
-# conda
-conda config --set channel_alias https://conda.__DOMAIN__
-# PyTorch / CUDA
-pip install torch --index-url https://torch.__DOMAIN__/whl/cu121
-# Go
-go env -w GOPROXY=https://goproxy.__DOMAIN__,direct
-# HuggingFace
-export HF_ENDPOINT=https://hf.__DOMAIN__
-# Rust (~/.cargo/config.toml)
-#   [source.crates-io] replace-with="m"
-#   [registries.m] index="sparse+https://crates.__DOMAIN__/"
-# Maven (settings.xml &lt;mirror&gt;) / Gradle
-#   https://maven.__DOMAIN__   (Central)   https://gradle.__DOMAIN__ (plugins)
-# Ollama
-ollama pull ollama.docker.__DOMAIN__/library/llama3</code></pre><button class="cp">copy</button></div>
-    <div class="grid">
-      <div class="cell"><a href="https://npm.__DOMAIN__/">npm</a><span class="u">npmjs</span></div>
-      <div class="cell"><a href="https://pypi.__DOMAIN__/index/">pypi</a><span class="u">PyPI</span></div>
-      <div class="cell"><a href="https://conda.__DOMAIN__/">conda</a><span class="u">conda-forge</span></div>
-      <div class="cell"><a href="https://torch.__DOMAIN__/whl/">torch</a><span class="u">pytorch wheels</span></div>
-      <div class="cell"><a href="https://goproxy.__DOMAIN__/">goproxy</a><span class="u">Go modules</span></div>
-      <div class="cell"><a href="https://hf.__DOMAIN__/">hf</a><span class="u">HuggingFace</span></div>
-      <div class="cell"><a href="https://crates.__DOMAIN__/">crates</a><span class="u">Rust cargo</span></div>
-      <div class="cell"><a href="https://maven.__DOMAIN__/">maven</a><span class="u">Maven Central</span></div>
-      <div class="cell"><a href="https://gradle.__DOMAIN__/">gradle</a><span class="u">Gradle plugins</span></div>
-      <div class="cell"><a href="https://ollama.docker.__DOMAIN__/">ollama</a><span class="u">LLM 模型</span></div>
-    </div>
-  </section>
-
-  <section class="reveal">
-    <div class="sechead"><span class="no">04</span><h2>系统 / 通用</h2><span class="hint">免登录</span></div>
-    <div class="row"><span class="name">apt 缓存</span><a class="dom" href="https://apt.__DOMAIN__/">apt.__DOMAIN__</a><span class="up">任意 apt 源 · host-in-path</span></div>
-    <p class="note">规则：在上游域名前加 <code>https://apt.__DOMAIN__/</code> 即代理任意 apt 源（.deb 缓存、索引保持新鲜）。第三方源把 GPG key 也一起走代理。示例用 <code>jammy</code>(22.04)，按需换成 <code>noble</code>/<code>focal</code> 等。<br>同一个 <code>apt.__DOMAIN__/&lt;host&gt;/…</code> 也缓存 <strong>.rpm / .apk</strong>：RPM 系（EPEL/Rocky/Fedora）直接把 baseurl 前面加它即可。</p>
-    <div class="row"><span class="name">Alpine apk</span><a class="dom" href="https://apk.__DOMAIN__/">apk.__DOMAIN__</a><span class="up">/etc/apk/repositories</span></div>
-    <div class="codewrap"><pre><code># /etc/apk/repositories 把 dl-cdn.alpinelinux.org 换成 apk.__DOMAIN__
-https://apk.__DOMAIN__/alpine/v3.19/main
-https://apk.__DOMAIN__/alpine/v3.19/community</code></pre><button class="cp">copy</button></div>
-    <div class="codewrap"><pre><code># 系统源 / NVIDIA CUDA
-deb https://apt.__DOMAIN__/archive.ubuntu.com/ubuntu jammy main universe
-deb https://apt.__DOMAIN__/developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64 /</code></pre><button class="cp">copy</button></div>
-    <div class="subhead"><h3>常用第三方源（复制即用，含 key）</h3><span class="hint">已实测通代理</span></div>
-    <div class="codewrap"><pre><code># Python 多版本 · deadsnakes
-curl -fsSL "https://cache.__DOMAIN__/https/keyserver.ubuntu.com/pks/lookup?op=get&amp;search=0xF23C5A6CF475977595C89F51BA6932366A755776" | sudo gpg --dearmor -o /usr/share/keyrings/deadsnakes.gpg
-echo "deb [signed-by=/usr/share/keyrings/deadsnakes.gpg] https://apt.__DOMAIN__/ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu jammy main" | sudo tee /etc/apt/sources.list.d/deadsnakes.list</code></pre><button class="cp">copy</button></div>
-    <div class="codewrap"><pre><code># Tailscale
-curl -fsSL https://apt.__DOMAIN__/pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale.gpg >/dev/null
-echo "deb [signed-by=/usr/share/keyrings/tailscale.gpg] https://apt.__DOMAIN__/pkgs.tailscale.com/stable/ubuntu jammy main" | sudo tee /etc/apt/sources.list.d/tailscale.list</code></pre><button class="cp">copy</button></div>
-    <div class="codewrap"><pre><code># Docker CE
-curl -fsSL https://apt.__DOMAIN__/download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.gpg] https://apt.__DOMAIN__/download.docker.com/linux/ubuntu jammy stable" | sudo tee /etc/apt/sources.list.d/docker.list</code></pre><button class="cp">copy</button></div>
-    <div class="codewrap"><pre><code># Kubernetes · v1.30
-curl -fsSL https://apt.__DOMAIN__/pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | sudo gpg --dearmor -o /usr/share/keyrings/k8s.gpg
-echo "deb [signed-by=/usr/share/keyrings/k8s.gpg] https://apt.__DOMAIN__/pkgs.k8s.io/core:/stable:/v1.30/deb/ /" | sudo tee /etc/apt/sources.list.d/k8s.list</code></pre><button class="cp">copy</button></div>
-    <div class="codewrap"><pre><code># Node.js · 20.x (NodeSource)
-curl -fsSL https://apt.__DOMAIN__/deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/nodesource.gpg
-echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://apt.__DOMAIN__/deb.nodesource.com/node_20.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list</code></pre><button class="cp">copy</button></div>
-    <p class="note">同理还可直接用：HashiCorp <code>apt.releases.hashicorp.com</code>、PostgreSQL <code>apt.postgresql.org</code>、Grafana <code>apt.grafana.com</code> —— 都是 <code>apt.__DOMAIN__/&lt;域名&gt;/…</code> 前缀 + 各自 key。改完跑 <code>sudo apt update</code>。</p>
-    <div class="row"><span class="name">通用 / Helm</span><a class="dom" href="https://cache.__DOMAIN__/">cache.__DOMAIN__</a><span class="up">直链文件 / chart</span></div>
-    <div class="codewrap"><pre><code>https://cache.__DOMAIN__/https/&lt;host&gt;/&lt;path&gt;</code></pre><button class="cp">copy</button></div>
-    <p class="note">通用缓存对会 302 跳转的上游（如 GitHub Releases）只透传不缓存，这类用 github.__DOMAIN__。</p>
-  </section>
-
-  <section class="reveal">
-    <div class="sechead"><span class="no">05</span><h2>统一入口 · all</h2><span class="hint">一个域名，按路径分发</span></div>
-    <p class="lead" style="margin:0 0 16px">不想记一堆子域名？<code>all.__DOMAIN__</code> 按<strong>第一段路径</strong>选服务。docker 天然可用：<code>docker pull all.__DOMAIN__/hub/library/nginx</code> 会请求 <code>/v2/<strong>hub</strong>/…</code>，hub 即选择器。</p>
-    <div class="codewrap"><pre><code># docker（仅公开源：hub/gcr/quay/k8s/mcr/…；私有仍走带鉴权的子域名）
-docker pull all.__DOMAIN__/hub/library/nginx
-docker pull all.__DOMAIN__/quay/prometheus/busybox
-# 其它服务：第一段是服务名
-npm  --registry https://all.__DOMAIN__/npm
-pip  install -i https://all.__DOMAIN__/pypi/index/ requests
-git  clone https://all.__DOMAIN__/github/github.com/&lt;user&gt;/&lt;repo&gt;
-# Rust: index = "sparse+https://all.__DOMAIN__/crates/"
-# apt : deb https://all.__DOMAIN__/apt/archive.ubuntu.com/ubuntu jammy main</code></pre><button class="cp">copy</button></div>
-    <p class="note">私有 docker 源（如 ghcr）不在 all 上暴露——它们保留在各自 basic-auth 的子域名，因此 all.__DOMAIN__ 可免登录。</p>
-  </section>
+  <div id="ph-svc"></div>
 
   <footer>
     <span>__FOOTER__</span>
@@ -330,6 +224,64 @@ git  clone https://all.__DOMAIN__/github/github.com/&lt;user&gt;/&lt;repo&gt;
     svg.innerHTML=grid+'<path class="area" d="'+dArea+'"/><path class="line" d="'+dLine+'"/>';
     txt('ph-chart-now', Math.round(pts[n-1])+'%');
   }
+
+  var D="__DOMAIN__";
+  function dk(reg,img,all){return {dom:reg+"·dk",t:reg,sub:img,
+      ded:"docker pull "+reg+".docker.$D/<x>",all:all?("docker pull all.$D/"+reg+"/<x>"):null};}
+  var CATS=[
+   {n:"01",title:"Docker 镜像",hint:"公开免登录 · 私有需 login",items:[
+     {dom:"hub·dk",t:"hub",sub:"docker.io",ded:"docker pull hub.docker.$D/library/nginx",all:"docker pull all.$D/hub/library/nginx"},
+     {dom:"ghcr·dk",t:"ghcr",sub:"ghcr.io · 私有",ded:"docker login ghcr.docker.$D\ndocker pull ghcr.docker.$D/&lt;owner&gt;/&lt;img&gt;",all:null},
+     {dom:"gcr·dk",t:"gcr",sub:"gcr.io",ded:"docker pull gcr.docker.$D/&lt;img&gt;",all:"docker pull all.$D/gcr/&lt;img&gt;"},
+     {dom:"k8s·dk",t:"k8s",sub:"registry.k8s.io",ded:"docker pull k8s.docker.$D/&lt;img&gt;",all:"docker pull all.$D/k8s/&lt;img&gt;"},
+     {dom:"k8s-gcr·dk",t:"k8s-gcr",sub:"k8s.gcr.io",ded:"docker pull k8s-gcr.docker.$D/&lt;img&gt;",all:"docker pull all.$D/k8s-gcr/&lt;img&gt;"},
+     {dom:"quay·dk",t:"quay",sub:"quay.io",ded:"docker pull quay.docker.$D/&lt;img&gt;",all:"docker pull all.$D/quay/&lt;img&gt;"},
+     {dom:"mcr·dk",t:"mcr",sub:"mcr.microsoft.com",ded:"docker pull mcr.docker.$D/&lt;img&gt;",all:"docker pull all.$D/mcr/&lt;img&gt;"},
+     {dom:"elastic·dk",t:"elastic",sub:"docker.elastic.co",ded:"docker pull elastic.docker.$D/&lt;img&gt;",all:"docker pull all.$D/elastic/&lt;img&gt;"},
+     {dom:"nvcr·dk",t:"nvcr",sub:"nvcr.io",ded:"docker pull nvcr.docker.$D/&lt;img&gt;",all:"docker pull all.$D/nvcr/&lt;img&gt;"},
+     {dom:"ollama·dk",t:"ollama",sub:"LLM 模型",ded:"ollama pull ollama.docker.$D/library/llama3",all:"ollama pull all.$D/ollama/library/llama3"}
+   ]},
+   {n:"02",title:"GitHub",hint:"免登录",items:[
+     {dom:"github",t:"github",sub:"clone / release / raw",ded:"git clone https://github.$D/https://github.com/&lt;u&gt;/&lt;r&gt;",all:"git clone https://all.$D/github/github.com/&lt;u&gt;/&lt;r&gt;"}
+   ]},
+   {n:"03",title:"语言 / 包",hint:"免登录",items:[
+     {dom:"npm",t:"npm",sub:"npmjs",ded:"npm config set registry https://npm.$D",all:"npm config set registry https://all.$D/npm"},
+     {dom:"pypi",t:"pypi",sub:"PyPI",ded:"pip config set global.index-url https://pypi.$D/index/",all:"pip install -i https://all.$D/pypi/index/ &lt;pkg&gt;"},
+     {dom:"conda",t:"conda",sub:"conda-forge",ded:"conda config --set channel_alias https://conda.$D",all:"conda config --set channel_alias https://all.$D/conda"},
+     {dom:"torch",t:"torch",sub:"pytorch wheels",ded:"pip install torch --index-url https://torch.$D/whl/cu121",all:"pip install torch --index-url https://all.$D/torch/whl/cu121"},
+     {dom:"goproxy",t:"goproxy",sub:"Go modules",ded:"go env -w GOPROXY=https://goproxy.$D,direct",all:"go env -w GOPROXY=https://all.$D/goproxy,direct"},
+     {dom:"hf",t:"hf",sub:"HuggingFace",ded:"export HF_ENDPOINT=https://hf.$D",all:"export HF_ENDPOINT=https://all.$D/hf"},
+     {dom:"crates",t:"crates",sub:"Rust cargo",ded:"# ~/.cargo/config.toml\nindex = \"sparse+https://crates.$D/\"",all:"index = \"sparse+https://all.$D/crates/\""},
+     {dom:"maven",t:"maven",sub:"Maven Central",ded:"&lt;url&gt;https://maven.$D&lt;/url&gt;",all:"&lt;url&gt;https://all.$D/maven&lt;/url&gt;"},
+     {dom:"gmaven",t:"gmaven",sub:"Google Maven",ded:"https://gmaven.$D",all:"https://all.$D/gmaven"},
+     {dom:"gradle",t:"gradle",sub:"Gradle plugins",ded:"https://gradle.$D",all:"https://all.$D/gradle"}
+   ]},
+   {n:"04",title:"系统 / 通用",hint:"免登录",items:[
+     {dom:"apt",t:"apt",sub:"deb · rpm · apk · host-in-path",ded:"deb https://apt.$D/archive.ubuntu.com/ubuntu jammy main",all:"deb https://all.$D/apt/archive.ubuntu.com/ubuntu jammy main"},
+     {dom:"apk",t:"apk",sub:"Alpine",ded:"https://apk.$D/alpine/v3.19/main",all:"https://all.$D/apk/alpine/v3.19/main"},
+     {dom:"cache",t:"cache",sub:"直链 / chart",ded:"https://cache.$D/https/&lt;host&gt;/&lt;path&gt;",all:"https://all.$D/cache/https/&lt;host&gt;/&lt;path&gt;"}
+   ]}
+  ];
+  function renderSvc(probes){
+    var wrap=document.getElementById('ph-svc'); if(!wrap) return;
+    var okAll=!!(probes['all']&&probes['all'].ok), html='';
+    CATS.forEach(function(cat){
+      var body='';
+      cat.items.forEach(function(it){
+        var okDed=!!(probes[it.dom]&&probes[it.dom].ok), lines=[];
+        if(okDed) lines.push(it.ded.replace(/\$D/g,D));
+        if(okAll&&it.all) lines.push(it.all.replace(/\$D/g,D));
+        if(!lines.length) return;
+        body+='<div class="row"><span class="name">'+it.t+'</span><span class="up">'+it.sub+'</span></div>'
+             +'<div class="codewrap"><pre><code>'+lines.join('\n')+'</code></pre><button class="cp">copy</button></div>';
+      });
+      if(!body) return;
+      html+='<section class="reveal"><div class="sechead"><span class="no">'+cat.n+'</span><h2>'+cat.title+'</h2><span class="hint">'+cat.hint+'</span></div>'+body+'</section>';
+    });
+    wrap.innerHTML=html||'<p class="note" style="margin-top:18px">暂无可达服务，等待 DNS 生效 / 探测中…</p>';
+    wrap.querySelectorAll('.cp').forEach(function(b){b.onclick=function(){var c=b.parentElement.querySelector('code').innerText;navigator.clipboard.writeText(c).then(function(){b.textContent='copied';b.classList.add('ok');setTimeout(function(){b.textContent='copy';b.classList.remove('ok');},1400);});};});
+  }
+
   function load(){
     fetch('/phstatus?t='+Date.now()).then(function(r){return r.json()}).then(function(d){
       var c=d.cache;
@@ -364,14 +316,14 @@ git  clone https://all.__DOMAIN__/github/github.com/&lt;user&gt;/&lt;repo&gt;
 
       var pr=d.probes||{}, pbox=document.getElementById('ph-probes');
       if(pbox){
-        var pk=Object.keys(pr).sort(), up=0;
+        var reach=Object.keys(pr).filter(function(k){return pr[k].ok;}).sort();
         pbox.innerHTML='';
-        pk.forEach(function(k){
-          var v=pr[k], cls=v.ok?'pill up':'pill down'; if(v.ok)up++;
-          pbox.insertAdjacentHTML('beforeend','<span class="'+cls+'">'+k+(v.ok?' '+v.ms+'ms':' 不可达')+'</span>');
+        reach.forEach(function(k){
+          pbox.insertAdjacentHTML('beforeend','<span class="pill up">'+k+' '+pr[k].ms+'ms</span>');
         });
-        txt('ph-probes-n', pk.length? up+'/'+pk.length+' 可达':'每 5 分钟');
+        txt('ph-probes-n', reach.length+' 个可达');
       }
+      renderSvc(pr);
 
       chart(d.history||[]);
     }).catch(function(){txt('ph-ts','proxyhub 暂不可用');});
