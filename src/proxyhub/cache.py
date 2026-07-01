@@ -213,7 +213,8 @@ class DiskCache:
         parts = key.split(":", 2)
         p0 = parts[0]
         if p0 == "docker" and len(parts) >= 2:
-            return "docker/" + parts[1]
+            # blobs are deduped under one digest-keyed pool shared by all sources
+            return "docker/layers" if parts[1] == "blob" else "docker/" + parts[1]
         if p0 == "web" and len(parts) >= 2:
             return parts[1]
         if p0 == "gen":

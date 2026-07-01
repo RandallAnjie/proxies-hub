@@ -125,6 +125,14 @@ def test_persistent_index_survives_reopen():
     asyncio.run(go())
 
 
+def test_docker_blob_grouped_as_shared_layers():
+    with tempfile.TemporaryDirectory() as d:
+        c = DiskCache(d, max_bytes=10**9)
+        # a digest-keyed blob (shared pool) vs a per-registry manifest key
+        assert c._group_label("docker:blob:sha256:" + "a" * 64) == "docker/layers"
+        assert c._group_label("docker:hub:/v2/library/nginx/manifests/latest") == "docker/hub"
+
+
 def test_startup_cleans_partials():
     with tempfile.TemporaryDirectory() as d:
         c = DiskCache(d, max_bytes=10**9)

@@ -104,7 +104,10 @@ class DockerProxy:
         method = request.method
         is_blob = bool(_BLOB.match(path))
         digest = path.rsplit("/", 1)[-1]
-        key = f"docker:{self.reg.name}:{path}"
+        # blobs are content-addressed by their sha256 — key by digest ALONE so a
+        # layer shared across repos/registries is stored once, not once per repo
+        # path. (integrity is still verified against the digest on fill.)
+        key = f"docker:blob:{digest}" if is_blob else f"docker:{self.reg.name}:{path}"
 
         # cached blob: serve from disk, never touch upstream
         if is_blob:
