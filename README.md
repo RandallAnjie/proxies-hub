@@ -127,13 +127,16 @@ Implemented and **live-tested**:
   `*.deb`, passes indexes through fresh; reaches upstreams over https.
 - **Range / partial content**: cached objects serve `206` with `Content-Range`;
   a ranged miss still fills the whole object and serves the slice.
-- **`/status`**: JSON metrics — uptime, routes, request counts, cache
-  hits/misses/hit-rate/bytes/files/usage.
+- **Manifests**: a digest reference is immutable — cached forever and deduped
+  across sources (like blobs); a tag is revalidated with `If-None-Match` so an
+  unchanged tag is answered `304` without refetching the body.
+- **`/status`** (JSON) and **`/metrics`** (Prometheus): uptime, requests,
+  cache hits/misses/hit-rate/bytes/files, verify failures, revalidations, and a
+  **per-service** breakdown (files/bytes/hits/misses for docker, each mirror, …).
 - **Persistent LRU index** (`.index.json`): eviction pops the least-recently-used
   entry; survives restart (no full tree walk).
 
-Everything above is unit-tested and live-tested. Possible future work: ETag/
-conditional revalidation for indexes, and a Prometheus `/metrics` exposition.
+Everything above is unit-tested and live-tested; CI runs `ruff` + `pytest`.
 
 ### Verified: pulls that take longer than 10 minutes
 

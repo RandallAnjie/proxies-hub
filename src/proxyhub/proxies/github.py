@@ -20,7 +20,6 @@ from aiohttp import web
 
 from ..cache import DiskCache
 from ..config import GitHubCfg
-from ..upstream import session
 from .base import fetch_json, send, upstream_filler
 
 API = "https://api.github.com"

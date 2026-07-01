@@ -1,8 +1,9 @@
 """Shared aiohttp client session + small helpers for upstream requests."""
 from __future__ import annotations
 
-import aiohttp
 from typing import Optional
+
+import aiohttp
 
 _session: Optional[aiohttp.ClientSession] = None
 

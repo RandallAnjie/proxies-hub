@@ -18,6 +18,15 @@ from pathlib import Path
 
 from aiohttp import web
 
+from . import upstream
+from .cache import DiskCache
+from .config import Config
+from .proxies.apt import AptProxy
+from .proxies.docker import DockerProxy
+from .proxies.github import GitHubProxy
+from .proxies.pypi import PyPIProxy
+from .proxies.webcache import GenericCacheProxy, WebCacheProxy
+
 _STATIC = Path(__file__).parent / "static"
 
 
@@ -45,14 +54,6 @@ def _render_dashboard(cfg) -> str:
             .replace("__FOOTER__", left)
             .replace("__DOMAIN__", domain))
 
-from . import upstream
-from .cache import DiskCache
-from .config import Config
-from .proxies.apt import AptProxy
-from .proxies.docker import DockerProxy
-from .proxies.github import GitHubProxy
-from .proxies.pypi import PyPIProxy
-from .proxies.webcache import GenericCacheProxy, WebCacheProxy
 
 log = logging.getLogger("proxyhub")
 
@@ -130,6 +131,40 @@ class RollingHitRate:
         return round(dh / tot * 100, 1) if tot > 0 else None
 
 
+def _prometheus(now: float, started: float, reqs, cache) -> str:
+    cs = cache.stats()
+    out = []
+
+    def m(name, value, typ, help_):
+        out.append(f"# HELP {name} {help_}")
+        out.append(f"# TYPE {name} {typ}")
+        out.append(f"{name} {value}")
+
+    m("proxyhub_uptime_seconds", int(now - started), "gauge", "Seconds since start")
+    m("proxyhub_requests_total", sum(reqs.values()), "counter", "Requests handled")
+    m("proxyhub_cache_hits_total", cs["hits"], "counter", "Cache hits")
+    m("proxyhub_cache_misses_total", cs["misses"], "counter", "Cache misses")
+    m("proxyhub_cache_bytes_served_total", cs["bytes_served"], "counter", "Bytes served from cache")
+    m("proxyhub_cache_bytes", cs["cache_bytes"], "gauge", "Cache size on disk")
+    m("proxyhub_cache_max_bytes", cs["cache_max"], "gauge", "Cache capacity")
+    m("proxyhub_cache_files", cs["cache_files"], "gauge", "Cached objects")
+    m("proxyhub_cache_verify_failures_total", cs["verify_failures"], "counter",
+      "Digest verify failures")
+    m("proxyhub_cache_revalidations_total", cs["revalidations"], "counter", "Index revalidations")
+    out.append("# TYPE proxyhub_requests_by_host_total counter")
+    for h, n in reqs.items():
+        out.append(f'proxyhub_requests_by_host_total{{host="{h}"}} {n}')
+    bd = cache.breakdown()
+    for mname, field, typ in (("proxyhub_cache_service_hits_total", "hits", "counter"),
+                              ("proxyhub_cache_service_misses_total", "misses", "counter"),
+                              ("proxyhub_cache_service_bytes", "bytes", "gauge"),
+                              ("proxyhub_cache_service_files", "files", "gauge")):
+        out.append(f"# TYPE {mname} {typ}")
+        for svc, v in bd.items():
+            out.append(f'{mname}{{service="{svc}"}} {v[field]}')
+    return "\n".join(out) + "\n"
+
+
 def build_app(cfg: Config) -> web.Application:
     cache = DiskCache(cfg.cache_dir, cfg.cache_max_bytes,
                       protect_window=cfg.cache_protect_window,
@@ -158,6 +193,9 @@ def build_app(cfg: Config) -> web.Application:
     async def dispatch(request: web.Request) -> web.StreamResponse:
         if request.path == "/healthz":
             return web.json_response({"ok": True, "routes": sorted(routes)})
+        if request.path == "/metrics":
+            return web.Response(text=_prometheus(time.time(), started, reqs, cache),
+                                content_type="text/plain")
         if request.path in ("/status", "/phstatus"):
             now = time.time()
             return web.json_response({

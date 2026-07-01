@@ -88,6 +88,7 @@ class DiskCache:
         self.misses = 0
         self.bytes_served = 0
         self.started = time.time()
+        self._svc: dict[str, list] = {}          # service -> [hits, misses]
         # persistent LRU index: digest -> {"key","size","atime"}
         self._index: dict[str, dict] = {}
         self._total = 0
@@ -204,6 +205,12 @@ class DiskCache:
     def _is_pinned(self, key: str) -> bool:
         return bool(key) and any(p.search(key) for p in self._pins)
 
+    def _svc_bump(self, key: str, hit: bool):
+        if not key:                              # passthrough has no cache key
+            return
+        rec = self._svc.setdefault(self._group_label(key), [0, 0])
+        rec[0 if hit else 1] += 1
+
     @staticmethod
     def _group_label(key: str) -> str:
         """Service label for a cache key — the cache is one shared pool, this
@@ -222,13 +229,20 @@ class DiskCache:
         return p0  # pypi, apt, …
 
     def breakdown(self) -> dict:
-        """Per-service {files, bytes} from the in-memory index."""
+        """Per-service {files, bytes, hits, misses} — size from the on-disk index,
+        hit/miss from the live counters."""
         groups: dict[str, dict] = {}
+
+        def g(label):
+            return groups.setdefault(label, {"files": 0, "bytes": 0, "hits": 0, "misses": 0})
+
         for e in self._index.values():
-            g = groups.setdefault(self._group_label(e.get("key", "") or ""),
-                                   {"files": 0, "bytes": 0})
-            g["files"] += 1
-            g["bytes"] += int(e.get("size", 0))
+            grp = g(self._group_label(e.get("key", "") or ""))
+            grp["files"] += 1
+            grp["bytes"] += int(e.get("size", 0))
+        for svc, (h, m) in self._svc.items():
+            grp = g(svc)
+            grp["hits"], grp["misses"] = h, m
         return groups
 
     def stats(self) -> dict:
@@ -274,8 +288,10 @@ class DiskCache:
         meta = self.lookup(key)
         if meta is not None:
             self.hits += 1
+            self._svc_bump(key, True)
             return meta, self._read_file(key, 0, meta.size - 1)
         self.misses += 1
+        self._svc_bump(key, False)
         if not cacheable:
             return await self._passthrough(filler)
         dl = await self._begin(key, filler, verify=verify)
@@ -295,12 +311,14 @@ class DiskCache:
         meta = self.lookup(key)
         if meta is not None:
             self.hits += 1
+            self._svc_bump(key, True)
             total = meta.size
             real_end = total - 1 if end is None or end >= total else end
             m = self._range_meta(meta, start, real_end, total)
             return m, self._read_file(key, start, real_end)
 
         self.misses += 1
+        self._svc_bump(key, False)
         if not cacheable:
             return await self._passthrough(filler)  # let upstream handle range
         dl = await self._begin(key, filler, verify=verify)
@@ -329,12 +347,14 @@ class DiskCache:
             async for _ in gen:    # drain (no body, but release the connection)
                 pass
             self.hits += 1
+            self._svc_bump(key, True)
             self._bump(key)
             return cached, self._read_file(key, 0, cached.size - 1)
 
         # changed (200, or anything else) — stream to the client while writing a
         # fresh copy, then atomically replace the cached entry.
         self.misses += 1
+        self._svc_bump(key, False)
         meta.key = key
         if meta.total is not None and meta.total >= 0:
             meta.size = meta.total
@@ -348,7 +368,8 @@ class DiskCache:
             try:
                 with open(rv, "wb") as f:
                     if first:
-                        f.write(first); size += len(first)
+                        f.write(first)
+                        size += len(first)
                         if h:
                             h.update(first)
                         self.bytes_served += len(first)
@@ -356,7 +377,8 @@ class DiskCache:
                     async for _, c in gen:
                         if not c:
                             continue
-                        f.write(c); size += len(c)
+                        f.write(c)
+                        size += len(c)
                         if h:
                             h.update(c)
                         self.bytes_served += len(c)
@@ -500,7 +522,9 @@ class DiskCache:
                     raise dl.error
                 if dl.done:
                     if not part_p.exists() and data_p.exists() and path != data_p:
-                        f.close(); f = open(data_p, "rb"); path = data_p
+                        f.close()
+                        f = open(data_p, "rb")
+                        path = data_p
                         continue
                     # read any tail
                     f.seek(pos)

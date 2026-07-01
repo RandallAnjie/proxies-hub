@@ -153,9 +153,12 @@ def test_sweep_partials_age_and_active():
         c = DiskCache(d, max_bytes=10**9)
         sub = c.root / "aa" / "bb"
         sub.mkdir(parents=True, exist_ok=True)
-        old = sub / "old.part"; old.write_bytes(b"x")
-        fresh = sub / "fresh.part"; fresh.write_bytes(b"x")
-        active = sub / "active.part"; active.write_bytes(b"x")
+        old = sub / "old.part"
+        old.write_bytes(b"x")
+        fresh = sub / "fresh.part"
+        fresh.write_bytes(b"x")
+        active = sub / "active.part"
+        active.write_bytes(b"x")
         past = time.time() - 1200
         os.utime(old, (past, past))
         os.utime(active, (past, past))     # old, but it's an in-flight fill

@@ -315,10 +315,12 @@ echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://apt.__DOMAIN__/
       if(bar){bar.style.width=pct+'%'; bar.className=pct>=90?'hot':(pct>=70?'warn':'');}
 
       var bd=d.cache_breakdown||{};
-      var items=Object.keys(bd).map(function(k){return {name:k,val:bd[k].bytes,files:bd[k].files};})
-                      .sort(function(a,b){return b.val-a.val;});
+      var items=Object.keys(bd).map(function(k){
+        var v=bd[k], t=(v.hits||0)+(v.misses||0);
+        return {name:k,val:v.bytes,files:v.files,hr:(t?Math.round(v.hits/t*100):null)};
+      }).sort(function(a,b){return b.val-a.val;});
       txt('ph-cache-tot',items.length+' 类 · '+c.cache_files+' 文件');
-      bars('ph-break',items,function(x){return sz(x.val)+' · '+x.files+'f';});
+      bars('ph-break',items,function(x){return sz(x.val)+' · '+x.files+'f'+(x.hr!=null?' · 命中'+x.hr+'%':'');});
 
       var ents=Object.entries(d.requests_by_host).map(function(e){
         return {name:e[0].replace('.__DOMAIN__','').replace('.docker','\u00b7dk'),val:e[1]};

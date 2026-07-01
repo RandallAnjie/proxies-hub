@@ -66,7 +66,8 @@ def upstream_filler(method: str, url: str, headers: dict,
             finally:
                 await resp.release()
             return
-        yield CacheMeta(key="", size=0, content_type="text/plain", status=508), b"too many redirects"
+        yield (CacheMeta(key="", size=0, content_type="text/plain", status=508),
+               b"too many redirects")
 
     return gen
 

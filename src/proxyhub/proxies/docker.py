@@ -9,6 +9,7 @@ Implements just enough of the distribution protocol to be a caching mirror:
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 import time
 from typing import Optional
@@ -21,6 +22,7 @@ from ..upstream import session
 from .base import parse_range, proxy, ranged_upstream_filler, send, upstream_filler
 
 _BLOB = re.compile(r"^/v2/.+/blobs/sha256:[0-9a-f]{64}$")
+_MANIFEST = re.compile(r"^/v2/(.+)/manifests/(.+)$")
 _BEARER = re.compile(r'(\w+)="([^"]*)"')
 
 
@@ -93,6 +95,53 @@ class DockerProxy:
             headers.update(await self._auth_header(chal))
         return headers
 
+    async def _handle_manifest(self, request, url, path, method, accept, reference):
+        # by-digest: content-addressed -> cache forever, keyed by digest (shared
+        # across repos/registries). docker re-verifies the digest itself, so no
+        # need to hash here.
+        if reference.startswith("sha256:"):
+            mkey = f"docker:manifest:{reference}"
+            cached = self.cache.lookup(mkey)
+            if cached is not None:
+                cached.extra_headers.setdefault("Docker-Content-Digest", reference)
+                if method == "HEAD":
+                    return await send(request, cached, _empty())
+                return await proxy(request, self.cache, mkey, "GET", url, {}, cacheable=True)
+            headers = await self._authorized_headers(url, accept)
+            if method == "HEAD":
+                meta, chunks = await self.cache.stream(
+                    "", upstream_filler("HEAD", url, headers), cacheable=False)
+                meta.extra_headers.setdefault("Docker-Content-Digest", reference)
+                return await send(request, meta, chunks)
+            meta, chunks = await self.cache.stream(
+                mkey, upstream_filler("GET", url, headers), cacheable=True)
+            meta.extra_headers.setdefault("Docker-Content-Digest", reference)
+            return await send(request, meta, chunks)
+
+        # by-tag: mutable. HEAD passes through; GET caches + revalidates. The
+        # served body depends on Accept, so the cache key includes it.
+        headers = await self._authorized_headers(url, accept)
+        if method == "HEAD":
+            meta, chunks = await self.cache.stream(
+                "", upstream_filler("HEAD", url, headers), cacheable=False)
+            return await send(request, meta, chunks)
+        ahash = hashlib.sha1(accept.encode()).hexdigest()[:8]
+        tkey = f"docker:mtag:{self.reg.name}:{path}:{ahash}"
+        cached = self.cache.peek(tkey)
+        if cached is not None:
+            et = cached.extra_headers.get("ETag") or cached.extra_headers.get("Etag")
+            if not et:
+                dcd = cached.extra_headers.get("Docker-Content-Digest")
+                et = f'"{dcd}"' if dcd else None
+            if et:
+                cond = dict(headers, **{"If-None-Match": et})
+                meta, chunks = await self.cache.stream_revalidate(
+                    tkey, upstream_filler("GET", url, cond), cached)
+                return await send(request, meta, chunks)
+        meta, chunks = await self.cache.stream(
+            tkey, upstream_filler("GET", url, headers), cacheable=True)
+        return await send(request, meta, chunks)
+
     async def handle(self, request: web.Request) -> web.StreamResponse:
         path = request.path  # e.g. /v2/library/nginx/manifests/latest
         # /v2/ ping: answer locally (this proxy fronts auth; clients auth to us
@@ -120,6 +169,15 @@ class DockerProxy:
                 return await proxy(request, self.cache, key, "GET", url, {}, cacheable=True)
 
         accept = request.headers.get("Accept", "*/*")
+
+        # manifests: a digest reference is immutable (cache forever, dedup across
+        # sources); a tag is mutable (revalidate with If-None-Match so an
+        # unchanged tag is answered 304 without refetching the body)
+        m_man = _MANIFEST.match(path)
+        if m_man and method in ("GET", "HEAD"):
+            return await self._handle_manifest(request, url, path, method, accept,
+                                               m_man.group(2))
+
         headers = await self._authorized_headers(url, accept)
 
         # blob GET (uncached): fetch from upstream in Range chunks so a slow

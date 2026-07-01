@@ -89,7 +89,8 @@ class Config:
         c.domain = _envstr("PROXYHUB_DOMAIN", raw.get("domain", c.domain))
         cache = raw.get("cache", {})
         c.cache_dir = _envstr("PROXYHUB_CACHE_DIR", cache.get("dir", c.cache_dir))
-        c.cache_max_bytes = _bytes(_envstr("PROXYHUB_CACHE_MAX", cache.get("max_size", c.cache_max_bytes)))
+        c.cache_max_bytes = _bytes(_envstr(
+            "PROXYHUB_CACHE_MAX", cache.get("max_size", c.cache_max_bytes)))
         c.cache_protect_window = int(cache.get("protect_window", c.cache_protect_window))
         c.cache_low_water = float(cache.get("low_water", c.cache_low_water))
         c.cache_pin = list(cache.get("pin", []))

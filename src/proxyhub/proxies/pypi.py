@@ -46,7 +46,8 @@ class PyPIProxy:
             sub = "/" + sub
         url = f"{SIMPLE}{sub}"
         accept = request.headers.get("Accept", "text/html")
-        async with session().get(url, headers={"Accept": accept, "User-Agent": "proxyhub-pypi"}) as r:
+        hdrs = {"Accept": accept, "User-Agent": "proxyhub-pypi"}
+        async with session().get(url, headers=hdrs) as r:
             status = r.status
             body = await r.read()
             ctype = r.headers.get("Content-Type", "text/html")
