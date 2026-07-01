@@ -38,7 +38,8 @@ class CratesProxy:
             if not data:
                 return web.Response(status=502, text="crates config unavailable\n")
             data = dict(data)
-            data["dl"] = f"https://{request.host}/dl"
+            # `prefix` is set when reached via the all-in-one host (all.<domain>/crates)
+            data["dl"] = f"https://{request.host}{request.get('prefix', '')}/dl"
             return web.json_response(data)
 
         # crate tarball — immutable, cache it

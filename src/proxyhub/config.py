@@ -67,6 +67,11 @@ class CratesCfg:
 
 
 @dataclass
+class AllCfg:
+    enabled: bool = False   # single host dispatched by path: all.<domain>/<svc>/...
+
+
+@dataclass
 class Config:
     host: str = "0.0.0.0"
     port: int = 8080
@@ -83,6 +88,7 @@ class Config:
     apt: AptCfg = field(default_factory=AptCfg)
     pypi: PyPICfg = field(default_factory=PyPICfg)
     crates: CratesCfg = field(default_factory=CratesCfg)
+    all_in_one: AllCfg = field(default_factory=AllCfg)
 
     @classmethod
     def load(cls, path: str) -> "Config":
@@ -122,6 +128,7 @@ class Config:
         c.apt = AptCfg(enabled=ap.get("enabled", False), scheme=ap.get("scheme", "https"))
         c.pypi = PyPICfg(enabled=(raw.get("pypi") or {}).get("enabled", False))
         c.crates = CratesCfg(enabled=(raw.get("crates") or {}).get("enabled", False))
+        c.all_in_one = AllCfg(enabled=(raw.get("all") or {}).get("enabled", False))
         return c
 
 

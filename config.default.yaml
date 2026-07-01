@@ -72,3 +72,6 @@ pypi:
 
 crates:
   enabled: true
+
+all:
+  enabled: true

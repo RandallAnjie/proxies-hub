@@ -51,8 +51,10 @@ class PyPIProxy:
             status = r.status
             body = await r.read()
             ctype = r.headers.get("Content-Type", "text/html")
-        # rewrite the file host (works for both HTML and JSON simple responses)
+        # rewrite the file host (works for both HTML and JSON simple responses).
+        # `prefix` is set when reached via the all-in-one host (all.<domain>/pypi).
+        base = f"https://{request.host}{request.get('prefix', '')}/files/"
         text = body.decode("utf-8", "replace").replace(
-            "https://files.pythonhosted.org/", f"https://{request.host}/files/")
+            "https://files.pythonhosted.org/", base)
         return web.Response(status=status, body=text.encode(),
                             headers={"Content-Type": ctype, "X-Proxyhub": "1"})

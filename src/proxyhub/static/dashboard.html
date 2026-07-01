@@ -235,6 +235,21 @@ echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://apt.__DOMAIN__/
     <p class="note">通用缓存对会 302 跳转的上游（如 GitHub Releases）只透传不缓存，这类用 github.__DOMAIN__。</p>
   </section>
 
+  <section class="reveal">
+    <div class="sechead"><span class="no">05</span><h2>统一入口 · all</h2><span class="hint">一个域名，按路径分发</span></div>
+    <p class="lead" style="margin:0 0 16px">不想记一堆子域名？<code>all.__DOMAIN__</code> 按<strong>第一段路径</strong>选服务。docker 天然可用：<code>docker pull all.__DOMAIN__/hub/library/nginx</code> 会请求 <code>/v2/<strong>hub</strong>/…</code>，hub 即选择器。</p>
+    <div class="codewrap"><pre><code># docker（仅公开源：hub/gcr/quay/k8s/mcr/…；私有仍走带鉴权的子域名）
+docker pull all.__DOMAIN__/hub/library/nginx
+docker pull all.__DOMAIN__/quay/prometheus/busybox
+# 其它服务：第一段是服务名
+npm  --registry https://all.__DOMAIN__/npm
+pip  install -i https://all.__DOMAIN__/pypi/index/ requests
+git  clone https://all.__DOMAIN__/github/github.com/&lt;user&gt;/&lt;repo&gt;
+# Rust: index = "sparse+https://all.__DOMAIN__/crates/"
+# apt : deb https://all.__DOMAIN__/apt/archive.ubuntu.com/ubuntu jammy main</code></pre><button class="cp">copy</button></div>
+    <p class="note">私有 docker 源（如 ghcr）不在 all 上暴露——它们保留在各自 basic-auth 的子域名，因此 all.__DOMAIN__ 可免登录。</p>
+  </section>
+
   <footer>
     <span>__FOOTER__</span>
     <span>__FOOTERR__</span>

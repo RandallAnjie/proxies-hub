@@ -21,6 +21,7 @@ from aiohttp import web
 from . import upstream
 from .cache import DiskCache
 from .config import Config
+from .proxies.all import AllProxy
 from .proxies.apt import AptProxy
 from .proxies.crates import CratesProxy
 from .proxies.docker import DockerProxy
@@ -190,6 +191,19 @@ def build_app(cfg: Config) -> web.Application:
     if cfg.crates.enabled:
         routes[f"crates.{cfg.domain}"] = CratesProxy(cache)
     routes[f"cache.{cfg.domain}"] = GenericCacheProxy(cache)
+
+    # all-in-one: one host, dispatched by path prefix
+    if cfg.all_in_one.enabled:
+        svc = {name: routes[f"{name}.{cfg.domain}"] for name in cfg.web}
+        svc["cache"] = routes[f"cache.{cfg.domain}"]
+        for n, on in (("github", cfg.github.enabled), ("apt", cfg.apt.enabled),
+                      ("pypi", cfg.pypi.enabled), ("crates", cfg.crates.enabled)):
+            if on:
+                svc[n] = routes[f"{n}.{cfg.domain}"]
+        # docker: only public sources (no stored creds); private stay authed
+        dockers = {n: routes[f"{n}.docker.{cfg.domain}"]
+                   for n, reg in cfg.docker.items() if not (reg.username or reg.password)}
+        routes[f"all.{cfg.domain}"] = AllProxy(svc, dockers)
     dashboard_html = _render_dashboard(cfg)
     dash_host = f"dash.{cfg.domain}"
 
