@@ -137,6 +137,9 @@
     <p class="note" style="margin:0 0 12px">所有服务共用<strong>一个</strong>缓存池，按 key 前缀隔离（docker 各源、各包镜像各自独立计量），淘汰统一走 LRU + 保护窗口 + pin。下面是各服务实际占用：</p>
     <div class="bars" id="ph-break"></div>
 
+    <div class="subhead"><h3>域名探测 · 端到端</h3><span class="hint" id="ph-probes-n">每 5 分钟</span></div>
+    <div class="dots" id="ph-probes"></div>
+
     <div class="subhead"><h3>请求量 · 按域名</h3><span class="hint" id="ph-hosts-n">—</span></div>
     <div class="bars" id="ph-hosts"></div>
   </section>
@@ -358,6 +361,17 @@ git  clone https://all.__DOMAIN__/github/github.com/&lt;user&gt;/&lt;repo&gt;
       txt('ph-ts',new Date().toLocaleTimeString('zh-CN'));
       txt('ph-hosts-n',ents.length+' 个活跃域名');
       bars('ph-hosts',ents,function(x){return x.val;});
+
+      var pr=d.probes||{}, pbox=document.getElementById('ph-probes');
+      if(pbox){
+        var pk=Object.keys(pr).sort(), up=0;
+        pbox.innerHTML='';
+        pk.forEach(function(k){
+          var v=pr[k], cls=v.ok?'pill up':'pill down'; if(v.ok)up++;
+          pbox.insertAdjacentHTML('beforeend','<span class="'+cls+'">'+k+(v.ok?' '+v.ms+'ms':' 不可达')+'</span>');
+        });
+        txt('ph-probes-n', pk.length? up+'/'+pk.length+' 可达':'每 5 分钟');
+      }
 
       chart(d.history||[]);
     }).catch(function(){txt('ph-ts','proxyhub 暂不可用');});
