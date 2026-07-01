@@ -1,10 +1,25 @@
 """Hourly hit-rate buckets: per-hour rate, empty hours carry the prior value."""
-from proxyhub.server import HourlyHitRate
+from proxyhub.server import HourlyHitRate, RollingHitRate
 
 
 class _Cache:
     hits = 0
     misses = 0
+
+
+def test_rolling_10min_window():
+    c = _Cache()
+    r = RollingHitRate(c, window=600)
+    t = 1_000_000
+    r.sample(t)                       # baseline at (0,0)
+    c.hits, c.misses = 9, 1           # 10 reqs, 90% — all inside window
+    assert r.rate(t + 300) == 90.0
+    # 11 min later: the early activity ages out of the trailing window
+    r.sample(t + 660)
+    c.hits, c.misses = 9 + 1, 1 + 9   # +1 hit, +9 miss in the new window -> 10%
+    assert r.rate(t + 900) == 10.0
+    # a quiet window -> no requests -> None (not a stale number)
+    assert r.rate(t + 100000) is None
 
 
 def test_hourly_buckets_and_carry_forward():

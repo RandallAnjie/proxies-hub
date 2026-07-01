@@ -104,6 +104,32 @@ class HourlyHitRate:
         return out
 
 
+class RollingHitRate:
+    """Hit rate over a trailing window (default 10 min) — a live 'how is it doing
+    right now' number. The since-boot cumulative rate goes stale and stops
+    reacting once enough requests have accrued; this doesn't."""
+
+    def __init__(self, cache, window: int = 600):
+        self._cache = cache
+        self._window = window
+        self._samples: deque = deque()          # (t, hits, misses), ascending
+
+    def sample(self, now: float):
+        self._samples.append((now, self._cache.hits, self._cache.misses))
+        cutoff = now - self._window
+        # keep the newest sample at/older than the window edge as the baseline
+        while len(self._samples) > 1 and self._samples[1][0] <= cutoff:
+            self._samples.popleft()
+
+    def rate(self, now: float):
+        self.sample(now)
+        _, h0, m0 = self._samples[0]
+        dh = self._cache.hits - h0
+        dm = self._cache.misses - m0
+        tot = dh + dm
+        return round(dh / tot * 100, 1) if tot > 0 else None
+
+
 def build_app(cfg: Config) -> web.Application:
     cache = DiskCache(cfg.cache_dir, cfg.cache_max_bytes,
                       protect_window=cfg.cache_protect_window,
@@ -113,6 +139,7 @@ def build_app(cfg: Config) -> web.Application:
     reqs: Counter = Counter()
     started = time.time()
     hourly = HourlyHitRate(cache, hours=24)   # per-hour hit-rate for the chart
+    rolling = RollingHitRate(cache, window=600)   # trailing 10-min hit rate
 
     for name, reg in cfg.docker.items():
         routes[f"{name}.docker.{cfg.domain}"] = DockerProxy(reg, cache)
@@ -132,14 +159,16 @@ def build_app(cfg: Config) -> web.Application:
         if request.path == "/healthz":
             return web.json_response({"ok": True, "routes": sorted(routes)})
         if request.path in ("/status", "/phstatus"):
+            now = time.time()
             return web.json_response({
-                "uptime": int(time.time() - started),
+                "uptime": int(now - started),
                 "routes": sorted(routes),
                 "requests_total": sum(reqs.values()),
                 "requests_by_host": dict(reqs),
                 "cache": cache.stats(),
+                "hit_rate_10m": rolling.rate(now),
                 "cache_breakdown": cache.breakdown(),
-                "history": hourly.series(time.time()),
+                "history": hourly.series(now),
             })
         host = request.host.split(":")[0]
         proxy = routes.get(host)
@@ -159,7 +188,9 @@ def build_app(cfg: Config) -> web.Application:
     async def _ticker():
         while True:
             await asyncio.sleep(60)
-            hourly.tick(time.time())
+            now = time.time()
+            hourly.tick(now)
+            rolling.sample(now)
 
     async def _start_bg(app):
         app["_ticker"] = asyncio.create_task(_ticker())

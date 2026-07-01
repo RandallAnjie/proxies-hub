@@ -115,7 +115,7 @@
     <div class="sechead"><span class="no">PH</span><h2>proxyhub 实时监控</h2><span class="hint" id="ph-ts">—</span></div>
     <div class="statbar">
       <div class="stat"><div class="k">运行</div><div class="v" id="ph-up">—</div></div>
-      <div class="stat"><div class="k">命中率 累计</div><div class="v" id="ph-hit">—</div></div>
+      <div class="stat"><div class="k">命中率 10分钟</div><div class="v" id="ph-hit">—</div></div>
       <div class="stat"><div class="k">请求总数</div><div class="v" id="ph-req">—</div></div>
       <div class="stat"><div class="k">已服务</div><div class="v" id="ph-served">—</div></div>
       <div class="stat"><div class="k">缓存文件</div><div class="v" id="ph-files">—</div></div>
@@ -301,7 +301,7 @@ echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://apt.__DOMAIN__/
     fetch('/phstatus?t='+Date.now()).then(function(r){return r.json()}).then(function(d){
       var c=d.cache;
       txt('ph-up',dur(d.uptime));
-      txt('ph-hit',c.hit_rate+'%');
+      txt('ph-hit',d.hit_rate_10m==null?'—':d.hit_rate_10m+'%');
       txt('ph-req',d.requests_total);
       txt('ph-served',sz(c.bytes_served));
       txt('ph-files',c.cache_files);
