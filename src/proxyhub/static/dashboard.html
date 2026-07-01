@@ -282,6 +282,42 @@
     wrap.querySelectorAll('.cp').forEach(function(b){b.onclick=function(){var c=b.parentElement.querySelector('code').innerText;navigator.clipboard.writeText(c).then(function(){b.textContent='copied';b.classList.add('ok');setTimeout(function(){b.textContent='copy';b.classList.remove('ok');},1400);});};});
   }
 
+  // client-side probing: the browser IS the real client, so this reflects true
+  // public availability (DNS + TLS + Caddy + proxyhub) — no server hairpin.
+  function _phost(dom){ return dom.indexOf('·dk')>=0 ? dom.replace('·dk','.docker')+'.'+D : dom+'.'+D; }
+  function _ppath(dom){ return dom.indexOf('·dk')>=0 ? '/v2/' : '/'; }
+  function probeOne(url){
+    return new Promise(function(res){
+      var ctl=new AbortController(), t0=Date.now();
+      var to=setTimeout(function(){ctl.abort();},8000);
+      fetch(url,{mode:'no-cors',cache:'no-store',signal:ctl.signal})
+        .then(function(){clearTimeout(to);res({ok:true,ms:Date.now()-t0});})
+        .catch(function(){clearTimeout(to);res({ok:false});});
+    });
+  }
+  function probeAll(){
+    var tg=[{l:'all',u:'https://all.'+D+'/'}];
+    CATS.forEach(function(c){c.items.forEach(function(it){
+      tg.push({l:it.dom,u:'https://'+_phost(it.dom)+_ppath(it.dom)});
+    });});
+    var out={};
+    return Promise.all(tg.map(function(t){return probeOne(t.u).then(function(r){out[t.l]=r;});})).then(function(){return out;});
+  }
+  function probeLoop(){
+    var w=document.getElementById('ph-svc');
+    if(w && !w.innerHTML) w.innerHTML='<p class="note" style="margin-top:18px">正在从你的浏览器探测各域名可用性…</p>';
+    probeAll().then(function(pr){
+      var pbox=document.getElementById('ph-probes');
+      if(pbox){
+        var reach=Object.keys(pr).filter(function(k){return pr[k].ok;}).sort();
+        pbox.innerHTML='';
+        reach.forEach(function(k){ pbox.insertAdjacentHTML('beforeend','<span class="pill up">'+k+' '+pr[k].ms+'ms</span>'); });
+        txt('ph-probes-n', reach.length+' 个可达');
+      }
+      renderSvc(pr);
+    });
+  }
+
   function load(){
     fetch('/phstatus?t='+Date.now()).then(function(r){return r.json()}).then(function(d){
       var c=d.cache;
@@ -314,21 +350,11 @@
       txt('ph-hosts-n',ents.length+' 个活跃域名');
       bars('ph-hosts',ents,function(x){return x.val;});
 
-      var pr=d.probes||{}, pbox=document.getElementById('ph-probes');
-      if(pbox){
-        var reach=Object.keys(pr).filter(function(k){return pr[k].ok;}).sort();
-        pbox.innerHTML='';
-        reach.forEach(function(k){
-          pbox.insertAdjacentHTML('beforeend','<span class="pill up">'+k+' '+pr[k].ms+'ms</span>');
-        });
-        txt('ph-probes-n', reach.length+' 个可达');
-      }
-      renderSvc(pr);
-
       chart(d.history||[]);
     }).catch(function(){txt('ph-ts','proxyhub 暂不可用');});
   }
   load(); setInterval(load,15000);
+  probeLoop(); setInterval(probeLoop,60000);
 })();
 </script>
 </body>

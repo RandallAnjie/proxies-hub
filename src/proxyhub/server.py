@@ -16,7 +16,6 @@ import time
 from collections import Counter, deque
 from pathlib import Path
 
-import aiohttp
 from aiohttp import web
 
 from . import upstream
@@ -134,34 +133,6 @@ class RollingHitRate:
         return round(dh / tot * 100, 1) if tot > 0 else None
 
 
-class Prober:
-    """Periodically probes each live proxy domain end-to-end (DNS + TLS + Caddy +
-    proxyhub) for the dash. Only configured hosts are probed, so a domain that
-    isn't enabled never shows up. Reachable = the host answered (status < 500).
-    A configured host that isn't answering (e.g. DNS not set yet) shows down."""
-
-    def __init__(self, targets: dict):
-        self.targets = targets            # label -> url
-        self.results: dict = {}           # label -> {ok, ms, at}
-
-    async def _one(self, label: str, url: str):
-        t0 = time.time()
-        ok = False
-        try:
-            async with upstream.session().head(
-                    url, allow_redirects=True,
-                    timeout=aiohttp.ClientTimeout(total=8)) as r:
-                ok = r.status < 500
-        except Exception:
-            ok = False
-        self.results[label] = {"ok": ok, "ms": int((time.time() - t0) * 1000),
-                               "at": int(time.time())}
-
-    async def run(self):
-        await asyncio.gather(*(self._one(k, v) for k, v in self.targets.items()),
-                             return_exceptions=True)
-
-
 def _prometheus(now: float, started: float, reqs, cache) -> str:
     cs = cache.stats()
     out = []
@@ -236,16 +207,6 @@ def build_app(cfg: Config) -> web.Application:
     dashboard_html = _render_dashboard(cfg)
     dash_host = f"dash.{cfg.domain}"
 
-    # probe each configured proxy domain end-to-end (only enabled hosts are here,
-    # so a service that isn't turned on never shows up in the dash)
-    probes = {}
-    for host in routes:
-        label = host[:-len(cfg.domain) - 1] if host.endswith("." + cfg.domain) else host
-        label = label.replace(".docker", "·dk")
-        path = "/v2/" if ".docker." in host else "/"
-        probes[label] = f"https://{host}{path}"
-    prober = Prober(probes)
-
     async def dispatch(request: web.Request) -> web.StreamResponse:
         if request.path == "/healthz":
             return web.json_response({"ok": True, "routes": sorted(routes)})
@@ -263,7 +224,6 @@ def build_app(cfg: Config) -> web.Application:
                 "hit_rate_10m": rolling.rate(now),
                 "cache_breakdown": cache.breakdown(),
                 "history": hourly.series(now),
-                "probes": prober.results,
             })
         host = request.host.split(":")[0]
         proxy = routes.get(host)
@@ -282,7 +242,6 @@ def build_app(cfg: Config) -> web.Application:
 
     async def _ticker():
         loop = asyncio.get_running_loop()
-        await prober.run()       # initial upstream probe
         n = 0
         while True:
             await asyncio.sleep(60)
@@ -290,8 +249,6 @@ def build_app(cfg: Config) -> web.Application:
             hourly.tick(now)
             rolling.sample(now)
             n += 1
-            if n % 5 == 0:       # every ~5 min: re-probe upstreams
-                await prober.run()
             if n % 10 == 0:      # every ~10 min: reap abandoned partials
                 await loop.run_in_executor(None, cache.sweep_partials)
 
