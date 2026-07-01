@@ -113,6 +113,33 @@ class DiskCache:
             log.info("cleaned %d stale partial file(s), freed %.1f MB",
                      removed, freed / 1024 / 1024)
 
+    def sweep_partials(self, min_age: int = 600) -> int:
+        """Periodic reaper for partials a *still-running* process can accumulate
+        (e.g. a revalidation whose client vanished mid-stream). Safe while fills
+        are active: skips any file backing an in-flight fill, and only removes
+        ones untouched for ``min_age`` seconds — an active fill refreshes its
+        ``.part`` mtime on every chunk, so a slow-but-live fetch is never hit."""
+        active = {str(dl.part_path) for dl in self._inflight.values()}
+        now = time.time()
+        removed = freed = 0
+        for p in self.root.rglob("*"):
+            if not (p.is_file() and p.name.endswith((".part", ".rv"))):
+                continue
+            if str(p) in active:
+                continue
+            try:
+                st = p.stat()
+                if now - st.st_mtime >= min_age:
+                    freed += st.st_size
+                    p.unlink()
+                    removed += 1
+            except OSError:
+                pass
+        if removed:
+            log.info("swept %d abandoned partial(s), freed %.1f MB",
+                     removed, freed / 1024 / 1024)
+        return removed
+
     # ---- paths ----
     def _digest(self, key: str) -> str:
         return hashlib.sha256(key.encode()).hexdigest()

@@ -186,11 +186,16 @@ def build_app(cfg: Config) -> web.Application:
             return web.Response(status=502, text=f"upstream error: {e}\n")
 
     async def _ticker():
+        loop = asyncio.get_running_loop()
+        n = 0
         while True:
             await asyncio.sleep(60)
             now = time.time()
             hourly.tick(now)
             rolling.sample(now)
+            n += 1
+            if n % 10 == 0:      # every ~10 min: reap abandoned partials
+                await loop.run_in_executor(None, cache.sweep_partials)
 
     async def _start_bg(app):
         app["_ticker"] = asyncio.create_task(_ticker())

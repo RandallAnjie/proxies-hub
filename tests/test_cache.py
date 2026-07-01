@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import tempfile
+import time
 
 from proxyhub.cache import CacheMeta, DiskCache
 
@@ -136,6 +137,30 @@ def test_startup_cleans_partials():
         assert not (sub / "x.part").exists()
         assert not (sub / "y.rv").exists()
         assert (sub / "real").exists()
+
+
+def test_sweep_partials_age_and_active():
+    import os
+    with tempfile.TemporaryDirectory() as d:
+        c = DiskCache(d, max_bytes=10**9)
+        sub = c.root / "aa" / "bb"
+        sub.mkdir(parents=True, exist_ok=True)
+        old = sub / "old.part"; old.write_bytes(b"x")
+        fresh = sub / "fresh.part"; fresh.write_bytes(b"x")
+        active = sub / "active.part"; active.write_bytes(b"x")
+        past = time.time() - 1200
+        os.utime(old, (past, past))
+        os.utime(active, (past, past))     # old, but it's an in-flight fill
+
+        class _DL:
+            part_path = active
+        c._inflight["k"] = _DL()
+
+        removed = c.sweep_partials(min_age=600)
+        assert not old.exists()            # untouched > window -> reaped
+        assert fresh.exists()              # too new -> kept
+        assert active.exists()             # backing an in-flight fill -> kept
+        assert removed == 1
 
 
 def test_passthrough_not_cached():
