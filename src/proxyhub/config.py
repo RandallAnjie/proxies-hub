@@ -62,6 +62,11 @@ class PyPICfg:
 
 
 @dataclass
+class CratesCfg:
+    enabled: bool = False   # Rust cargo sparse registry mirror
+
+
+@dataclass
 class Config:
     host: str = "0.0.0.0"
     port: int = 8080
@@ -77,6 +82,7 @@ class Config:
     github: GitHubCfg = field(default_factory=GitHubCfg)
     apt: AptCfg = field(default_factory=AptCfg)
     pypi: PyPICfg = field(default_factory=PyPICfg)
+    crates: CratesCfg = field(default_factory=CratesCfg)
 
     @classmethod
     def load(cls, path: str) -> "Config":
@@ -115,6 +121,7 @@ class Config:
         ap = raw.get("apt") or {}
         c.apt = AptCfg(enabled=ap.get("enabled", False), scheme=ap.get("scheme", "https"))
         c.pypi = PyPICfg(enabled=(raw.get("pypi") or {}).get("enabled", False))
+        c.crates = CratesCfg(enabled=(raw.get("crates") or {}).get("enabled", False))
         return c
 
 

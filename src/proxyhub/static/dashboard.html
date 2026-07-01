@@ -180,7 +180,14 @@ pip install torch --index-url https://torch.__DOMAIN__/whl/cu121
 # Go
 go env -w GOPROXY=https://goproxy.__DOMAIN__,direct
 # HuggingFace
-export HF_ENDPOINT=https://hf.__DOMAIN__</code></pre><button class="cp">copy</button></div>
+export HF_ENDPOINT=https://hf.__DOMAIN__
+# Rust (~/.cargo/config.toml)
+#   [source.crates-io] replace-with="m"
+#   [registries.m] index="sparse+https://crates.__DOMAIN__/"
+# Maven (settings.xml &lt;mirror&gt;) / Gradle
+#   https://maven.__DOMAIN__   (Central)   https://gradle.__DOMAIN__ (plugins)
+# Ollama
+ollama pull ollama.docker.__DOMAIN__/library/llama3</code></pre><button class="cp">copy</button></div>
     <div class="grid">
       <div class="cell"><a href="https://npm.__DOMAIN__/">npm</a><span class="u">npmjs</span></div>
       <div class="cell"><a href="https://pypi.__DOMAIN__/index/">pypi</a><span class="u">PyPI</span></div>
@@ -188,13 +195,21 @@ export HF_ENDPOINT=https://hf.__DOMAIN__</code></pre><button class="cp">copy</bu
       <div class="cell"><a href="https://torch.__DOMAIN__/whl/">torch</a><span class="u">pytorch wheels</span></div>
       <div class="cell"><a href="https://goproxy.__DOMAIN__/">goproxy</a><span class="u">Go modules</span></div>
       <div class="cell"><a href="https://hf.__DOMAIN__/">hf</a><span class="u">HuggingFace</span></div>
+      <div class="cell"><a href="https://crates.__DOMAIN__/">crates</a><span class="u">Rust cargo</span></div>
+      <div class="cell"><a href="https://maven.__DOMAIN__/">maven</a><span class="u">Maven Central</span></div>
+      <div class="cell"><a href="https://gradle.__DOMAIN__/">gradle</a><span class="u">Gradle plugins</span></div>
+      <div class="cell"><a href="https://ollama.docker.__DOMAIN__/">ollama</a><span class="u">LLM 模型</span></div>
     </div>
   </section>
 
   <section class="reveal">
     <div class="sechead"><span class="no">04</span><h2>系统 / 通用</h2><span class="hint">免登录</span></div>
     <div class="row"><span class="name">apt 缓存</span><a class="dom" href="https://apt.__DOMAIN__/">apt.__DOMAIN__</a><span class="up">任意 apt 源 · host-in-path</span></div>
-    <p class="note">规则：在上游域名前加 <code>https://apt.__DOMAIN__/</code> 即代理任意 apt 源（.deb 缓存、索引保持新鲜）。第三方源把 GPG key 也一起走代理。示例用 <code>jammy</code>(22.04)，按需换成 <code>noble</code>/<code>focal</code> 等。</p>
+    <p class="note">规则：在上游域名前加 <code>https://apt.__DOMAIN__/</code> 即代理任意 apt 源（.deb 缓存、索引保持新鲜）。第三方源把 GPG key 也一起走代理。示例用 <code>jammy</code>(22.04)，按需换成 <code>noble</code>/<code>focal</code> 等。<br>同一个 <code>apt.__DOMAIN__/&lt;host&gt;/…</code> 也缓存 <strong>.rpm / .apk</strong>：RPM 系（EPEL/Rocky/Fedora）直接把 baseurl 前面加它即可。</p>
+    <div class="row"><span class="name">Alpine apk</span><a class="dom" href="https://apk.__DOMAIN__/">apk.__DOMAIN__</a><span class="up">/etc/apk/repositories</span></div>
+    <div class="codewrap"><pre><code># /etc/apk/repositories 把 dl-cdn.alpinelinux.org 换成 apk.__DOMAIN__
+https://apk.__DOMAIN__/alpine/v3.19/main
+https://apk.__DOMAIN__/alpine/v3.19/community</code></pre><button class="cp">copy</button></div>
     <div class="codewrap"><pre><code># 系统源 / NVIDIA CUDA
 deb https://apt.__DOMAIN__/archive.ubuntu.com/ubuntu jammy main universe
 deb https://apt.__DOMAIN__/developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64 /</code></pre><button class="cp">copy</button></div>

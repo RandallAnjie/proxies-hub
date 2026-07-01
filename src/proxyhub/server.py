@@ -22,6 +22,7 @@ from . import upstream
 from .cache import DiskCache
 from .config import Config
 from .proxies.apt import AptProxy
+from .proxies.crates import CratesProxy
 from .proxies.docker import DockerProxy
 from .proxies.github import GitHubProxy
 from .proxies.pypi import PyPIProxy
@@ -186,6 +187,8 @@ def build_app(cfg: Config) -> web.Application:
         routes[f"apt.{cfg.domain}"] = AptProxy(cfg.apt, cache)
     if cfg.pypi.enabled:
         routes[f"pypi.{cfg.domain}"] = PyPIProxy(cache)
+    if cfg.crates.enabled:
+        routes[f"crates.{cfg.domain}"] = CratesProxy(cache)
     routes[f"cache.{cfg.domain}"] = GenericCacheProxy(cache)
     dashboard_html = _render_dashboard(cfg)
     dash_host = f"dash.{cfg.domain}"

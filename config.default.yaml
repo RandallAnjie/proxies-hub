@@ -23,6 +23,7 @@ docker:
   mcr:     { upstream: https://mcr.microsoft.com }
   elastic: { upstream: https://docker.elastic.co }
   nvcr:    { upstream: https://nvcr.io }
+  ollama:  { upstream: https://registry.ollama.ai }   # OCI: ollama pull models
 
 web:
   conda:
@@ -41,6 +42,22 @@ web:
   hf:
     upstream: https://huggingface.co
     no_cache: ['^/api/']
+  maven:
+    upstream: https://repo1.maven.org/maven2
+    revalidate: ['maven-metadata\.xml$']
+    no_cache: ['/$', '\.html$']
+  gmaven:
+    upstream: https://dl.google.com/dl/android/maven2
+    revalidate: ['maven-metadata\.xml$']
+    no_cache: ['/$', '\.html$']
+  gradle:
+    upstream: https://plugins.gradle.org/m2
+    revalidate: ['maven-metadata\.xml$']
+    no_cache: ['/$', '\.html$']
+  apk:
+    upstream: https://dl-cdn.alpinelinux.org
+    revalidate: ['APKINDEX\.tar\.gz$']
+    no_cache: ['/$', '\.html$']
 
 github:
   enabled: true
@@ -51,4 +68,7 @@ apt:
   scheme: https
 
 pypi:
+  enabled: true
+
+crates:
   enabled: true

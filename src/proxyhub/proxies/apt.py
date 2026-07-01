@@ -18,7 +18,7 @@ from ..cache import DiskCache
 from ..config import AptCfg
 from .base import proxy
 
-_PKG = (".deb", ".udeb", ".ddeb")
+_PKG = (".deb", ".udeb", ".ddeb", ".rpm", ".apk")   # deb + rpm (yum/dnf) + apk
 
 
 class AptProxy:
