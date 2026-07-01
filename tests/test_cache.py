@@ -124,6 +124,20 @@ def test_persistent_index_survives_reopen():
     asyncio.run(go())
 
 
+def test_startup_cleans_partials():
+    with tempfile.TemporaryDirectory() as d:
+        c = DiskCache(d, max_bytes=10**9)
+        sub = c.root / "ab" / "cd"
+        sub.mkdir(parents=True, exist_ok=True)
+        (sub / "x.part").write_bytes(b"leftover")     # abandoned partials
+        (sub / "y.rv").write_bytes(b"leftover")
+        (sub / "real").write_bytes(b"data")           # a real object must survive
+        DiskCache(d, max_bytes=10**9)                  # reopen -> cleanup runs
+        assert not (sub / "x.part").exists()
+        assert not (sub / "y.rv").exists()
+        assert (sub / "real").exists()
+
+
 def test_passthrough_not_cached():
     async def go():
         with tempfile.TemporaryDirectory() as d:

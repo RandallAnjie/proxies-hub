@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
 CHUNK = 256 * 1024
+log = logging.getLogger("proxyhub.cache")
 
 
 class IntegrityError(Exception):
@@ -91,7 +93,25 @@ class DiskCache:
         self._total = 0
         self._index_path = self.root / ".index.json"
         self._dirty = 0
+        self._cleanup_partials()
         self._load_index()
+
+    def _cleanup_partials(self):
+        """At startup no fill is in flight, so any leftover ``.part``/``.rv`` is an
+        abandoned partial from a killed run. It is untracked by the index, so LRU
+        would never reclaim it — delete it now to stop slow disk leakage."""
+        removed = freed = 0
+        for p in self.root.rglob("*"):
+            if p.is_file() and p.name.endswith((".part", ".rv")):
+                try:
+                    freed += p.stat().st_size
+                    p.unlink()
+                    removed += 1
+                except OSError:
+                    pass
+        if removed:
+            log.info("cleaned %d stale partial file(s), freed %.1f MB",
+                     removed, freed / 1024 / 1024)
 
     # ---- paths ----
     def _digest(self, key: str) -> str:
