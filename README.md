@@ -1,5 +1,7 @@
 # proxyhub
 
+English · [中文](README.zh.md)
+
 A single, hackable **Python** pull-through mirror proxy that replaces a stack of
 nginx + distribution-registry + ghproxy with one codebase. Built async on
 aiohttp around one core idea — a **decoupled full-speed buffering cache**: an
@@ -7,138 +9,144 @@ uncached object is fetched from upstream at server speed by one background task
 while any number of (possibly slow) clients stream from the growing file, so a
 slow client can never cause an upstream connection to time out mid-transfer.
 
-## What it does
+## What it proxies
 
 | Host (`domain = proxies.live`) | Backend |
 | --- | --- |
-| `hub.docker.<domain>`, `ghcr.docker.<domain>`, … | Docker Registry v2 pull-through (token auth to upstream, blobs cached by digest, manifests live) |
-| `github.<domain>` | GitHub proxy: `/<scheme>://<host>/<path>`, token aliases, **private release downloads** |
-| `conda.<domain>`, `torch.<domain>`, … | Caching reverse proxy for package indexes (packages cached, indexes kept fresh) |
-| `cache.<domain>` | Generic `/<scheme>/<host>/<path>` caching proxy |
+| `hub / ghcr / gcr / k8s / k8s-gcr / quay / mcr / elastic / nvcr / ollama` `.docker.<domain>` | Docker Registry v2 / OCI pull-through (token auth, blobs+manifests cached by digest & deduped) |
+| `github.<domain>` | GitHub: clone / raw / release, token aliases, **private release downloads** |
+| `npm / pypi / conda / torch / goproxy / hf / crates / maven / gmaven / gradle .<domain>` | Language & AI package mirrors (files cached, indexes revalidated) |
+| `apt.<domain>/<host>/<path>` | `apt` host-in-path — caches `.deb` / `.rpm` / `.apk` (Debian, EPEL/Rocky/Fedora, Alpine) |
+| `cache.<domain>/<scheme>/<host>/<path>` | Generic direct-file caching proxy |
+| **`all.<domain>/<service>/…`** | **One host, path-dispatched** — everything above through a single domain |
 
-### Highlights
+## Highlights
+
 - **Decoupled buffering cache** (`cache.py`): upstream fetch paced by the server,
   not the client; concurrent readers share one fill; LRU eviction by size.
-- **Digest integrity** (`cache.py`): a docker blob is hashed while it fills and
-  the sha256 is checked against its content-addressed digest before commit — a
-  truncated or corrupt fetch is rejected, never cached, never re-served.
-- **Smart eviction** (`cache.py`): LRU down to a low-water mark (no boundary
-  thrash); entries used within `protect_window` are evicted only as a last
-  resort (a burst of small files can't push out a hot large layer); `pin`
-  regexes are never evicted.
-- **Conditional revalidation** (`webcache.py`): `revalidate` indexes (conda
-  repodata, npm metadata) are cached *with* their ETag/Last-Modified and served
-  on a `304` — fresh like `no_cache`, but an unchanged (often large) index is not
-  re-downloaded.
-- **Chunked ("ranged") upstream fetch** (`base.py`): a large blob is pulled from
-  upstream in sequential 128 MB `Range` chunks, so no single upstream connection
-  stays open long enough to be cut — ghcr/CDNs drop slow long-lived fetches at
-  ~600 s. Reassembled into one logical stream; the response always carries a
-  known `Content-Length` (docker/containerd reconnect endlessly without it).
-- **Docker**: resolves the `WWW-Authenticate: Bearer` challenge and fetches a
-  token using configured credentials (a PAT for private ghcr), caches by digest.
-- **GitHub token aliases**: `?token=team` is swapped server-side for a real PAT,
-  so users share a word instead of pasting the org token.
-- **Private GitHub releases**: a `releases/download/<tag>/<asset>` URL is
-  translated to the API asset endpoint (the only way a PAT can fetch a private
-  asset) and streamed back — the simple URL "just works" for private repos.
+- **Chunked ("ranged") upstream fetch** (`base.py`): a large blob is pulled in
+  sequential 128 MB `Range` chunks, so no single upstream connection stays open
+  long enough to be cut — ghcr/CDNs drop slow long-lived fetches at ~600 s. The
+  response always carries a known `Content-Length` (docker reconnects forever
+  without it). On a mid-transfer `401` it refreshes the token and continues from
+  the current offset (a multi-GB layer can outlive its token).
+- **Content-addressed dedup**: docker **blobs and by-digest manifests** are keyed
+  by their sha256 alone, so a layer shared across repos/registries is stored
+  once. By-tag manifests are revalidated with `If-None-Match` (`304` → cached).
+- **Digest integrity**: a blob is hashed while it fills and checked against its
+  digest before commit — a truncated/corrupt fetch is never cached.
+- **Smart eviction**: LRU to a low-water mark (no boundary thrash); entries used
+  within `protect_window` are evicted only as a last resort; `pin` regexes never
+  evicted. Abandoned `.part`/`.rv` partials are swept on startup and every 10 min.
+- **Conditional revalidation** (`webcache.py`): big-but-stable indexes (conda
+  repodata, npm metadata, cargo index) are cached *with* their ETag and served
+  on a `304` — fresh, but unchanged indexes aren't re-downloaded.
+- **GitHub**: every connection type (git clone smart-HTTP, raw, archives, release
+  assets), `?token=alias` swapped server-side for a real PAT, and private
+  releases translated to the API asset endpoint so the plain URL just works.
+
+## All-in-one entrypoint
+
+`all.<domain>` routes by the **first path segment**, so you don't need to
+remember a subdomain per service:
+
+```bash
+docker pull all.proxies.live/hub/library/nginx      # -> /v2/hub/... , hub = selector
+pip install -i https://all.proxies.live/pypi/index/ requests
+git clone https://all.proxies.live/github/github.com/<u>/<r>
+# cargo index = "sparse+https://all.proxies.live/crates/"
+```
+
+Docker works naturally because `docker pull all.<domain>/hub/x` produces
+`/v2/hub/…`. **Private** docker sources (those with stored credentials) are *not*
+exposed on `all` — they stay on their own basic-auth'd subdomain — so `all` can
+be open.
+
+## Dashboard & docs
+
+- `https://dash.<domain>/` — **monitoring**: 10-min hit rate, hourly hit-rate
+  chart, cache usage, per-service breakdown, and end-to-end **domain probing**
+  (done in the browser, the real client — reflects true public availability).
+- `https://dash.<domain>/docs` — **usage docs**. HTML for browsers (probe-driven,
+  only lists domains you can actually reach; shows the dedicated + `all` form for
+  each). **`curl`/`wget`/empty-UA get Markdown** (`text/markdown`).
+- `/status` (JSON) and `/metrics` (Prometheus): uptime, requests, cache
+  hits/misses/bytes/files, verify failures, revalidations, per-service labels.
+
+```bash
+curl dash.proxies.live/docs        # markdown docs in your terminal
+```
 
 ## Run
 
 Out of the box — a baked default config means just a domain is enough:
 
 ```bash
-docker build -t proxyhub .
 docker run -p 8080:8080 -v cache:/var/cache/proxyhub \
-  -e PROXYHUB_DOMAIN=example.com proxyhub
+  -e PROXYHUB_DOMAIN=example.com ranjie/proxies
 ```
 
-That serves the **dashboard** at `/` (and at `dash.example.com`), `/status`
-JSON metrics, and every proxy host (`hub.docker.example.com`, `pypi.example.com`,
-…). Mount your own `/app/config.yaml` to change upstreams/credentials; override
+Mount your own `/app/config.yaml` to change upstreams/credentials; override
 scalars via env without touching the file:
 
 | env | overrides | default |
 | --- | --- | --- |
-| `PROXYHUB_DOMAIN` | host suffix the dashboard + routing use | `example.com` |
+| `PROXYHUB_DOMAIN` | host suffix for routing + dashboard | `example.com` |
 | `PROXYHUB_CACHE_MAX` | cache cap (e.g. `250g`) | `50g` |
 | `PROXYHUB_HOST` / `PROXYHUB_PORT` | bind address | `0.0.0.0:8080` |
 | `PROXYHUB_CACHE_DIR` | cache directory | `/var/cache/proxyhub` |
-
-The footer (project link + "Powered By Randall") is fixed and not configurable.
 
 From source: `pip install -r requirements.txt && PYTHONPATH=src python -m proxyhub -c config.yaml`
 (secrets like `${GHCR_PAT}` / `${GITHUB_PAT}` are read from the environment).
 
 It speaks **plain HTTP** on `:8080` and does **not** manage TLS — put your own
 reverse proxy (Caddy/nginx/Traefik) in front for certificates. Routing is by
-`Host` header; the dashboard also answers `/` on any unmatched host.
+`Host` header. The footer (project link + "Powered By Randall") is fixed.
 
-### Examples
+## Client config
+
 ```bash
-# docker (point daemon or pull explicitly)
 docker pull hub.docker.proxies.live/library/nginx
-
-# github raw / private release with a shared alias
-curl "https://github.proxies.live/https://raw.githubusercontent.com/o/r/main/f"
-wget "https://github.proxies.live/https://github.com/Org/Private/releases/download/v1/app.zip?token=team"
-
-# conda / pytorch
+docker login ghcr.docker.proxies.live && docker pull ghcr.docker.proxies.live/<o>/<i>   # private
+ollama pull ollama.docker.proxies.live/library/llama3
+npm config set registry https://npm.proxies.live
+pip config set global.index-url https://pypi.proxies.live/index/
 conda config --set channel_alias https://conda.proxies.live
 pip install torch --index-url https://torch.proxies.live/whl/cu121
-
-# anything direct
+go env -w GOPROXY=https://goproxy.proxies.live,direct
+export HF_ENDPOINT=https://hf.proxies.live
+# Rust ~/.cargo/config.toml -> index = "sparse+https://crates.proxies.live/"
+# Maven settings.xml <mirror><url>https://maven.proxies.live</url>
+# Alpine /etc/apk/repositories -> https://apk.proxies.live/alpine/v3.19/main
+# apt / rpm: prefix the upstream host with https://apt.proxies.live/
 curl https://cache.proxies.live/https/host/path/file.tgz
 ```
 
 ## Layout
+
 ```
 src/proxyhub/
-  cache.py            decoupled buffering disk cache + LRU
-  config.py           YAML config (env interpolation)
+  cache.py            decoupled buffering cache: dedup, integrity, LRU, revalidate, sweep
+  config.py           YAML config (+ ${ENV} and PROXYHUB_* overrides)
   upstream.py         shared aiohttp client session
-  server.py           Host-based router (aiohttp app)
+  server.py           Host router, dashboard/docs pages, /status, /metrics
   proxies/
-    base.py           upstream->filler, filler->response helpers
-    docker.py         Docker Registry v2 pull-through + bearer auth
+    base.py           ranged/redirect upstream fillers, response helpers
+    docker.py         Docker Registry v2 / OCI + bearer auth + manifest cache
     github.py         github proxy, token aliases, private release translation
     webcache.py       package-index mirror + generic url-prefix cache
-tests/test_cache.py   cache behaviour (miss/hit, shared fill, passthrough)
+    apt.py            apt/rpm/apk host-in-path mirror
+    pypi.py           PyPI simple-index rewrite + file cache
+    crates.py         Rust cargo sparse registry
+    all.py            single-host path dispatcher
+  static/             monitor.html + docs.html (dashboard templates)
+tests/                cache, ranged fetch + token refresh, hourly/rolling history
 ```
 
-## Status
+CI runs `ruff` + `pytest`; images publish to Docker Hub (`ranjie/proxies`,
+amd64 + arm64 built natively).
 
-Implemented and **live-tested**:
-
-- **Cache core** — decoupled full-speed buffering, concurrent readers share one
-  fill, LRU eviction, passthrough mode. (unit tests + live)
-- **Docker pull-through** — bearer-token auth to upstream, blobs cached by
-  digest, `HEAD` served from cache, `Range` requests passed through, CDN
-  redirects followed with `Authorization` dropped cross-host.
-- **GitHub, every connection type**
-  - `git clone` smart-HTTP (GET `info/refs` + POST `git-upload-pack`)
-  - raw / gist
-  - source archives & codeload tarball/zipball (redirect-aware)
-  - release assets — **public (direct) and private (API-asset translation)**
-  - api.github.com, signed CDN hosts
-  - token aliases (`?token=team`→PAT) and forwarded `Authorization` (private clone)
-- **conda / pytorch** package mirrors and the **generic** url-prefix cache.
-- **apt mirror** (`apt.<domain>/<host>/<path>`, apt-cacher-ng style): caches
-  `*.deb`, passes indexes through fresh; reaches upstreams over https.
-- **Range / partial content**: cached objects serve `206` with `Content-Range`;
-  a ranged miss still fills the whole object and serves the slice.
-- **Manifests**: a digest reference is immutable — cached forever and deduped
-  across sources (like blobs); a tag is revalidated with `If-None-Match` so an
-  unchanged tag is answered `304` without refetching the body.
-- **`/status`** (JSON) and **`/metrics`** (Prometheus): uptime, requests,
-  cache hits/misses/hit-rate/bytes/files, verify failures, revalidations, and a
-  **per-service** breakdown (files/bytes/hits/misses for docker, each mirror, …).
-- **Persistent LRU index** (`.index.json`): eviction pops the least-recently-used
-  entry; survives restart (no full tree walk).
-
-Everything above is unit-tested and live-tested; CI runs `ruff` + `pytest`.
-
-### Verified: pulls that take longer than 10 minutes
+## Verified: pulls that take longer than 10 minutes
 
 The original failure this project set out to kill: a large layer whose transfer
 outlasts the upstream's ~600 s cut window, surfacing to docker as
@@ -150,6 +158,6 @@ outlasts the upstream's ~600 s cut window, surfacing to docker as
   the longest single client connection stayed open **13.8 minutes** and returned
   `200` with a byte-exact body; chunked upstream fetch kept every upstream
   connection short-lived, so none hit the cut window.
-- A resumed `Range: bytes=N-` request (how docker restarts an interrupted layer)
-  is served `206` from the growing/cached file with sub-100 ms TTFB.
-- Warm re-read of a cached layer streams from disk at ~180 MB/s.
+- ghcr's CDN genuinely honours `Range` (verified `206` at arbitrary offsets);
+  a resumed `Range: bytes=N-` is served `206` with sub-100 ms TTFB; warm re-read
+  of a cached layer streams from disk at ~180 MB/s.
