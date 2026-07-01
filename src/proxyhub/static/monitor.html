@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__DOMAIN__ — 内网加速</title>
+<style>
+  :root{
+    --bg:#0d0e11; --panel:#141519; --ink:#e9e6e1; --dim:#8b8a86;
+    --line:#26272d; --accent:#ff5b35; --accent-soft:#ff5b3522;
+    --mono:ui-monospace,"SFMono-Regular","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  [data-theme="light"]{
+    --bg:#faf7f2; --panel:#fffefb; --ink:#1b1a17; --dim:#6b6a64;
+    --line:#e6e1d8; --accent:#e8401a; --accent-soft:#e8401a18;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+    line-height:1.6; -webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(var(--line) 1px,transparent 1px);
+    background-size:22px 22px;
+  }
+  .wrap{max-width:880px; margin:0 auto; padding:0 22px}
+  header{display:flex; align-items:baseline; justify-content:space-between; padding:54px 0 10px}
+  h1{font-family:var(--mono); font-size:clamp(26px,5vw,40px); margin:0; letter-spacing:-.5px}
+  h1 .dot{color:var(--accent)}
+  .tag{color:var(--dim); font-family:var(--mono); font-size:13px; margin:6px 0 0}
+  .toggle{cursor:pointer; border:1px solid var(--line); background:var(--panel); color:var(--ink);
+    width:40px; height:40px; border-radius:50%; font-size:18px; line-height:1; flex:0 0 auto;
+    transition:transform .35s ease, border-color .2s; display:grid; place-items:center}
+  .toggle:hover{transform:rotate(35deg); border-color:var(--accent)}
+  .lead{color:var(--dim); font-size:14.5px; max-width:60ch; margin:14px 0 38px; border-left:2px solid var(--accent); padding-left:14px}
+  section{margin:0 0 40px}
+  .sechead{display:flex; align-items:center; gap:12px; margin:0 0 16px}
+  .sechead .no{font-family:var(--mono); font-size:12px; color:var(--accent); border:1px solid var(--accent-soft); background:var(--accent-soft); padding:2px 7px; border-radius:4px}
+  .sechead h2{font-size:17px; margin:0; font-weight:600}
+  .sechead .hint{color:var(--dim); font-size:12.5px; font-family:var(--mono); margin-left:auto}
+  .row{border-top:1px solid var(--line); padding:13px 0; display:flex; gap:16px; align-items:baseline; flex-wrap:wrap}
+  .row:last-child{border-bottom:1px solid var(--line)}
+  .row .name{font-weight:600; min-width:120px}
+  .row .up{color:var(--dim); font-family:var(--mono); font-size:12.5px}
+  a.dom{font-family:var(--mono); color:var(--accent); text-decoration:none; background-image:linear-gradient(var(--accent),var(--accent)); background-size:0% 1px; background-repeat:no-repeat; background-position:0 100%; transition:background-size .25s}
+  a.dom:hover{background-size:100% 1px}
+  .codewrap{position:relative; margin:10px 0}
+  pre{background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    padding:14px 16px; overflow:auto; font-family:var(--mono); font-size:13px; margin:0}
+  pre code{white-space:pre}
+  .cp{position:absolute; top:8px; right:8px; cursor:pointer; border:1px solid var(--line);
+    background:var(--bg); color:var(--dim); font-family:var(--mono); font-size:11px; padding:3px 8px; border-radius:5px; transition:.15s}
+  .cp:hover{color:var(--accent); border-color:var(--accent)}
+  .cp.ok{color:#39c07a; border-color:#39c07a}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:8px; overflow:hidden}
+  .cell{background:var(--panel); padding:11px 13px}
+  .cell a{font-family:var(--mono); color:var(--accent); text-decoration:none; font-size:13px}
+  .cell a:hover{text-decoration:underline}
+  .cell .u{display:block; color:var(--dim); font-size:11px; font-family:var(--mono); margin-top:2px}
+  .note{color:var(--dim); font-size:12.5px; margin:8px 0 0}
+  footer{border-top:1px solid var(--line); margin-top:30px; padding:24px 0 50px; color:var(--dim); font-family:var(--mono); font-size:12px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px}
+  footer .blink{color:var(--accent)}
+  .statbar{display:grid; grid-template-columns:repeat(auto-fit,minmax(108px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:8px; overflow:hidden}
+  .stat{background:var(--panel); padding:12px 14px}
+  .stat .k{color:var(--dim); font-size:11px; font-family:var(--mono)}
+  .stat .v{font-family:var(--mono); font-size:17px; margin-top:3px}
+  .dots{display:flex; flex-wrap:wrap; gap:7px; margin-top:14px}
+  .pill{font-family:var(--mono); font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:20px; padding:3px 9px; display:flex; align-items:center; gap:6px}
+  .pill::before{content:""; width:7px; height:7px; border-radius:50%; background:var(--dim)}
+  .pill.up::before{background:#39c07a; box-shadow:0 0 0 3px #39c07a22}
+  .pill.down{color:var(--accent)} .pill.down::before{background:var(--accent)}
+  .bars{margin-top:14px; display:flex; flex-direction:column; gap:11px}
+  .bar .bl{display:flex; justify-content:space-between; font-family:var(--mono); font-size:12px; color:var(--dim); margin-bottom:5px}
+  .bar .bl span:last-child{color:var(--ink)}
+  .track{height:8px; background:var(--panel); border:1px solid var(--line); border-radius:6px; overflow:hidden}
+  .track i{display:block; height:100%; width:0; background:var(--accent); border-radius:6px; transition:width .5s ease}
+  .track i.warn{background:#e8a13a} .track i.hot{background:#e8401a}
+  .trends{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:18px}
+  .trend{border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:var(--panel)}
+  .trend .tl{font-family:var(--mono); font-size:11px; color:var(--dim); margin-bottom:6px}
+  .trend svg{width:100%; height:40px; display:block}
+  .trend svg path{fill:none; stroke:var(--accent); stroke-width:1.6}
+  .trend svg .area{fill:var(--accent-soft); stroke:none}
+  @media(max-width:560px){.trends{grid-template-columns:1fr}}
+  .chart{border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:12px 14px; margin-top:16px}
+  .chart .ct{display:flex; justify-content:space-between; align-items:baseline; font-family:var(--mono); font-size:12px; color:var(--dim); margin-bottom:6px}
+  .chart .ct b{color:var(--accent); font-weight:600}
+  .chart svg{width:100%; height:124px; display:block; overflow:visible}
+  .chart svg .area{fill:var(--accent-soft); stroke:none}
+  .chart svg .line{fill:none; stroke:var(--accent); stroke-width:2; vector-effect:non-scaling-stroke; stroke-linejoin:round}
+  .chart svg .grid{stroke:var(--line); stroke-width:1; vector-effect:non-scaling-stroke}
+  .chart svg .gtxt{fill:var(--dim); font:10px var(--mono)}
+  .subhead{display:flex; align-items:center; gap:10px; margin:22px 0 8px}
+  .subhead h3{font-size:14px; margin:0; font-weight:600}
+  .subhead .hint{color:var(--dim); font-size:12px; font-family:var(--mono); margin-left:auto}
+  .bar .bl small{color:var(--dim)}
+  .reveal{opacity:0; transform:translateY(8px); animation:rise .5s ease forwards}
+  @keyframes rise{to{opacity:1; transform:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>__BRAND_HTML__</h1>
+      <p class="tag">内网加速节点 · 镜像 / 包 / 模型</p>
+    </div>
+    <button class="toggle" id="t" title="切换主题" aria-label="切换主题">◐</button>
+  </header>
+
+  <p class="lead">内网加速 · 实时监控。使用文档见 <a class="dom" href="/docs">/docs</a>（<code>curl /docs</code> 得 Markdown）。</p>
+
+<section class="reveal" id="phstatus">
+    <div class="sechead"><span class="no">PH</span><h2>proxyhub 实时监控</h2><span class="hint" id="ph-ts">—</span></div>
+    <div class="statbar">
+      <div class="stat"><div class="k">运行</div><div class="v" id="ph-up">—</div></div>
+      <div class="stat"><div class="k">命中率 10分钟</div><div class="v" id="ph-hit">—</div></div>
+      <div class="stat"><div class="k">请求总数</div><div class="v" id="ph-req">—</div></div>
+      <div class="stat"><div class="k">已服务</div><div class="v" id="ph-served">—</div></div>
+      <div class="stat"><div class="k">缓存文件</div><div class="v" id="ph-files">—</div></div>
+      <div class="stat"><div class="k">校验失败</div><div class="v" id="ph-vf">—</div></div>
+      <div class="stat"><div class="k">索引重验</div><div class="v" id="ph-rv">—</div></div>
+      <div class="stat"><div class="k">Pin</div><div class="v" id="ph-pin">—</div></div>
+    </div>
+
+    <div class="chart">
+      <div class="ct"><span>命中率 · 近 24 小时 <small>(每格 1 小时)</small></span><span>本小时 <b id="ph-chart-now">—</b></span></div>
+      <svg id="ph-chart" viewBox="0 0 600 120" preserveAspectRatio="none"></svg>
+    </div>
+
+    <div class="bars" style="margin-top:16px">
+      <div class="bar"><div class="bl"><span>缓存用量</span><span id="ph-cache-l">—</span></div><div class="track"><i id="ph-cache-bar"></i></div></div>
+    </div>
+
+    <div class="subhead"><h3>缓存占用 · 单一共享池（按服务）</h3><span class="hint" id="ph-cache-tot">—</span></div>
+    <p class="note" style="margin:0 0 12px">所有服务共用<strong>一个</strong>缓存池，按 key 前缀隔离（docker 各源、各包镜像各自独立计量），淘汰统一走 LRU + 保护窗口 + pin。下面是各服务实际占用：</p>
+    <div class="bars" id="ph-break"></div>
+
+    <div class="subhead"><h3>域名探测 · 端到端</h3><span class="hint" id="ph-probes-n">每 5 分钟</span></div>
+    <div class="dots" id="ph-probes"></div>
+
+    <div class="subhead"><h3>请求量 · 按域名</h3><span class="hint" id="ph-hosts-n">—</span></div>
+    <div class="bars" id="ph-hosts"></div>
+  </section>
+
+  <footer>
+    <span>__FOOTER__</span>
+    <span>__FOOTERR__</span>
+  </footer>
+
+</div>
+<script>
+  (function(){
+    var root=document.documentElement, k='proxies-theme';
+    var saved=localStorage.getItem(k);
+    if(saved) root.dataset.theme=saved;
+    else if(window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches) root.dataset.theme='light';
+    document.getElementById('t').onclick=function(){
+      var n=root.dataset.theme==='dark'?'light':'dark';
+      root.dataset.theme=n; localStorage.setItem(k,n);
+    };
+    document.querySelectorAll('.cp').forEach(function(b){
+      b.onclick=function(){
+        var code=b.parentElement.querySelector('code').innerText;
+        navigator.clipboard.writeText(code).then(function(){
+          b.textContent='copied'; b.classList.add('ok');
+          setTimeout(function(){b.textContent='copy'; b.classList.remove('ok');},1400);
+        });
+      };
+    });
+    document.querySelectorAll('.reveal').forEach(function(el,i){ el.style.animationDelay=(i*0.07)+'s'; });
+
+  })();
+</script>
+<script>
+(function(){
+  function dur(s){var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d>0?d+'d '+h+'h':(h>0?h+'h '+m+'m':m+'m');}
+  function sz(b){if(b>=1099511627776)return (b/1099511627776).toFixed(2)+' T';var g=b/1073741824;return g>=1?g.toFixed(1)+' G':(b/1048576).toFixed(0)+' M';}
+  function txt(id,v){var e=document.getElementById(id); if(e)e.textContent=v;}
+  function bars(boxId,items,fmt){
+    var box=document.getElementById(boxId); if(!box)return;
+    var max=items.reduce(function(m,x){return Math.max(m,x.val)},1);
+    box.innerHTML='';
+    items.forEach(function(x){
+      var pct=Math.max(2,Math.round(x.val/max*100));
+      box.insertAdjacentHTML('beforeend',
+        '<div class="bar"><div class="bl"><span>'+x.name+'</span><span>'+fmt(x)+'</span></div>'+
+        '<div class="track"><i style="width:'+pct+'%"></i></div></div>');
+    });
+  }
+  function chart(series){
+    var svg=document.getElementById('ph-chart'); if(!svg)return;
+    var W=600,H=120,P=4;
+    // server already buckets per hour and carries empty hours forward
+    var pts=(series||[]).map(function(p){return (p&&p.rate!=null)?p.rate:null;});
+    var grid='';
+    [0,25,50,75,100].forEach(function(p){
+      var y=H-P-(p/100)*(H-2*P);
+      grid+='<line class="grid" x1="0" y1="'+y+'" x2="'+W+'" y2="'+y+'"/>';
+      if(p%50===0) grid+='<text class="gtxt" x="2" y="'+(y-2)+'">'+p+'%</text>';
+    });
+    var first=pts.findIndex(function(v){return v!==null;});
+    if(first<0){ svg.innerHTML=grid+'<text class="gtxt" x="300" y="64" text-anchor="middle">采集中…</text>'; txt('ph-chart-now','—'); return; }
+    pts=pts.slice(first);
+    for(var i=1;i<pts.length;i++){ if(pts[i]===null) pts[i]=pts[i-1]; }  // carry forward
+    var n=pts.length;
+    function X(i){return P+(n>1? i/(n-1):0)*(W-2*P);}
+    function Y(v){return H-P-(v/100)*(H-2*P);}
+    var dLine,dArea;
+    if(n===1){
+      var y=Y(pts[0]).toFixed(1);
+      dLine='M'+P+' '+y+' L'+(W-P)+' '+y;
+      dArea='M'+P+' '+y+' L'+(W-P)+' '+y+' L'+(W-P)+' '+(H-P)+' L'+P+' '+(H-P)+' Z';
+    } else {
+      dLine=''; for(var j=0;j<n;j++){ dLine+=(j?'L':'M')+X(j).toFixed(1)+' '+Y(pts[j]).toFixed(1)+' '; }
+      dArea='M'+X(0).toFixed(1)+' '+Y(pts[0]).toFixed(1)+' ';
+      for(var q=0;q<n;q++){ dArea+='L'+X(q).toFixed(1)+' '+Y(pts[q]).toFixed(1)+' '; }
+      dArea+='L'+X(n-1).toFixed(1)+' '+(H-P)+' L'+X(0).toFixed(1)+' '+(H-P)+' Z';
+    }
+    svg.innerHTML=grid+'<path class="area" d="'+dArea+'"/><path class="line" d="'+dLine+'"/>';
+    txt('ph-chart-now', Math.round(pts[n-1])+'%');
+  }
+
+  var D="__DOMAIN__";
+  function dk(reg,img,all){return {dom:reg+"·dk",t:reg,sub:img,
+      ded:"docker pull "+reg+".docker.$D/<x>",all:all?("docker pull all.$D/"+reg+"/<x>"):null};}
+  var CATS=[
+   {n:"01",title:"Docker 镜像",hint:"公开免登录 · 私有需 login",items:[
+     {dom:"hub·dk",t:"hub",sub:"docker.io",ded:"docker pull hub.docker.$D/library/nginx",all:"docker pull all.$D/hub/library/nginx"},
+     {dom:"ghcr·dk",t:"ghcr",sub:"ghcr.io · 私有",ded:"docker login ghcr.docker.$D\ndocker pull ghcr.docker.$D/&lt;owner&gt;/&lt;img&gt;",all:null},
+     {dom:"gcr·dk",t:"gcr",sub:"gcr.io",ded:"docker pull gcr.docker.$D/&lt;img&gt;",all:"docker pull all.$D/gcr/&lt;img&gt;"},
+     {dom:"k8s·dk",t:"k8s",sub:"registry.k8s.io",ded:"docker pull k8s.docker.$D/&lt;img&gt;",all:"docker pull all.$D/k8s/&lt;img&gt;"},
+     {dom:"k8s-gcr·dk",t:"k8s-gcr",sub:"k8s.gcr.io",ded:"docker pull k8s-gcr.docker.$D/&lt;img&gt;",all:"docker pull all.$D/k8s-gcr/&lt;img&gt;"},
+     {dom:"quay·dk",t:"quay",sub:"quay.io",ded:"docker pull quay.docker.$D/&lt;img&gt;",all:"docker pull all.$D/quay/&lt;img&gt;"},
+     {dom:"mcr·dk",t:"mcr",sub:"mcr.microsoft.com",ded:"docker pull mcr.docker.$D/&lt;img&gt;",all:"docker pull all.$D/mcr/&lt;img&gt;"},
+     {dom:"elastic·dk",t:"elastic",sub:"docker.elastic.co",ded:"docker pull elastic.docker.$D/&lt;img&gt;",all:"docker pull all.$D/elastic/&lt;img&gt;"},
+     {dom:"nvcr·dk",t:"nvcr",sub:"nvcr.io",ded:"docker pull nvcr.docker.$D/&lt;img&gt;",all:"docker pull all.$D/nvcr/&lt;img&gt;"},
+     {dom:"ollama·dk",t:"ollama",sub:"LLM 模型",ded:"ollama pull ollama.docker.$D/library/llama3",all:"ollama pull all.$D/ollama/library/llama3"}
+   ]},
+   {n:"02",title:"GitHub",hint:"免登录",items:[
+     {dom:"github",t:"github",sub:"clone / release / raw",ded:"git clone https://github.$D/https://github.com/&lt;u&gt;/&lt;r&gt;",all:"git clone https://all.$D/github/github.com/&lt;u&gt;/&lt;r&gt;"}
+   ]},
+   {n:"03",title:"语言 / 包",hint:"免登录",items:[
+     {dom:"npm",t:"npm",sub:"npmjs",ded:"npm config set registry https://npm.$D",all:"npm config set registry https://all.$D/npm"},
+     {dom:"pypi",t:"pypi",sub:"PyPI",ded:"pip config set global.index-url https://pypi.$D/index/",all:"pip install -i https://all.$D/pypi/index/ &lt;pkg&gt;"},
+     {dom:"conda",t:"conda",sub:"conda-forge",ded:"conda config --set channel_alias https://conda.$D",all:"conda config --set channel_alias https://all.$D/conda"},
+     {dom:"torch",t:"torch",sub:"pytorch wheels",ded:"pip install torch --index-url https://torch.$D/whl/cu121",all:"pip install torch --index-url https://all.$D/torch/whl/cu121"},
+     {dom:"goproxy",t:"goproxy",sub:"Go modules",ded:"go env -w GOPROXY=https://goproxy.$D,direct",all:"go env -w GOPROXY=https://all.$D/goproxy,direct"},
+     {dom:"hf",t:"hf",sub:"HuggingFace",ded:"export HF_ENDPOINT=https://hf.$D",all:"export HF_ENDPOINT=https://all.$D/hf"},
+     {dom:"crates",t:"crates",sub:"Rust cargo",ded:"# ~/.cargo/config.toml\nindex = \"sparse+https://crates.$D/\"",all:"index = \"sparse+https://all.$D/crates/\""},
+     {dom:"maven",t:"maven",sub:"Maven Central",ded:"&lt;url&gt;https://maven.$D&lt;/url&gt;",all:"&lt;url&gt;https://all.$D/maven&lt;/url&gt;"},
+     {dom:"gmaven",t:"gmaven",sub:"Google Maven",ded:"https://gmaven.$D",all:"https://all.$D/gmaven"},
+     {dom:"gradle",t:"gradle",sub:"Gradle plugins",ded:"https://gradle.$D",all:"https://all.$D/gradle"}
+   ]},
+   {n:"04",title:"系统 / 通用",hint:"免登录",items:[
+     {dom:"apt",t:"apt",sub:"deb · rpm · apk · host-in-path",ded:"deb https://apt.$D/archive.ubuntu.com/ubuntu jammy main",all:"deb https://all.$D/apt/archive.ubuntu.com/ubuntu jammy main"},
+     {dom:"apk",t:"apk",sub:"Alpine",ded:"https://apk.$D/alpine/v3.19/main",all:"https://all.$D/apk/alpine/v3.19/main"},
+     {dom:"cache",t:"cache",sub:"直链 / chart",ded:"https://cache.$D/https/&lt;host&gt;/&lt;path&gt;",all:"https://all.$D/cache/https/&lt;host&gt;/&lt;path&gt;"}
+   ]}
+  ];
+  function renderSvc(probes){
+    var wrap=document.getElementById('ph-svc'); if(!wrap) return;
+    var okAll=!!(probes['all']&&probes['all'].ok), html='';
+    CATS.forEach(function(cat){
+      var body='';
+      cat.items.forEach(function(it){
+        var okDed=!!(probes[it.dom]&&probes[it.dom].ok), lines=[];
+        if(okDed) lines.push(it.ded.replace(/\$D/g,D));
+        if(okAll&&it.all) lines.push(it.all.replace(/\$D/g,D));
+        if(!lines.length) return;
+        body+='<div class="row"><span class="name">'+it.t+'</span><span class="up">'+it.sub+'</span></div>'
+             +'<div class="codewrap"><pre><code>'+lines.join('\n')+'</code></pre><button class="cp">copy</button></div>';
+      });
+      if(!body) return;
+      html+='<section class="reveal"><div class="sechead"><span class="no">'+cat.n+'</span><h2>'+cat.title+'</h2><span class="hint">'+cat.hint+'</span></div>'+body+'</section>';
+    });
+    wrap.innerHTML=html||'<p class="note" style="margin-top:18px">暂无可达服务，等待 DNS 生效 / 探测中…</p>';
+    wrap.querySelectorAll('.cp').forEach(function(b){b.onclick=function(){var c=b.parentElement.querySelector('code').innerText;navigator.clipboard.writeText(c).then(function(){b.textContent='copied';b.classList.add('ok');setTimeout(function(){b.textContent='copy';b.classList.remove('ok');},1400);});};});
+  }
+
+  // client-side probing: the browser IS the real client, so this reflects true
+  // public availability (DNS + TLS + Caddy + proxyhub) — no server hairpin.
+  function _phost(dom){ return dom.indexOf('·dk')>=0 ? dom.replace('·dk','.docker')+'.'+D : dom+'.'+D; }
+  function _ppath(dom){ return dom.indexOf('·dk')>=0 ? '/v2/' : '/'; }
+  function probeOne(url){
+    return new Promise(function(res){
+      var ctl=new AbortController(), t0=Date.now();
+      var to=setTimeout(function(){ctl.abort();},8000);
+      fetch(url,{mode:'no-cors',cache:'no-store',signal:ctl.signal})
+        .then(function(){clearTimeout(to);res({ok:true,ms:Date.now()-t0});})
+        .catch(function(){clearTimeout(to);res({ok:false});});
+    });
+  }
+  function probeAll(){
+    var tg=[{l:'all',u:'https://all.'+D+'/'}];
+    CATS.forEach(function(c){c.items.forEach(function(it){
+      tg.push({l:it.dom,u:'https://'+_phost(it.dom)+_ppath(it.dom)});
+    });});
+    var out={};
+    return Promise.all(tg.map(function(t){return probeOne(t.u).then(function(r){out[t.l]=r;});})).then(function(){return out;});
+  }
+  function probeLoop(){
+    var w=document.getElementById('ph-svc');
+    if(w && !w.innerHTML) w.innerHTML='<p class="note" style="margin-top:18px">正在从你的浏览器探测各域名可用性…</p>';
+    probeAll().then(function(pr){
+      var pbox=document.getElementById('ph-probes');
+      if(pbox){
+        var reach=Object.keys(pr).filter(function(k){return pr[k].ok;}).sort();
+        pbox.innerHTML='';
+        reach.forEach(function(k){ pbox.insertAdjacentHTML('beforeend','<span class="pill up">'+k+' '+pr[k].ms+'ms</span>'); });
+        txt('ph-probes-n', reach.length+' 个可达');
+      }
+      renderSvc(pr);
+    });
+  }
+
+  function load(){
+    fetch('/phstatus?t='+Date.now()).then(function(r){return r.json()}).then(function(d){
+      var c=d.cache;
+      txt('ph-up',dur(d.uptime));
+      txt('ph-hit',d.hit_rate_10m==null?'—':d.hit_rate_10m+'%');
+      txt('ph-req',d.requests_total);
+      txt('ph-served',sz(c.bytes_served));
+      txt('ph-files',c.cache_files);
+      txt('ph-vf',c.verify_failures);
+      txt('ph-rv',c.revalidations);
+      txt('ph-pin',c.pins);
+
+      var used=c.cache_bytes,maxb=c.cache_max,pct=Math.min(100,Math.round(used/maxb*100));
+      txt('ph-cache-l',sz(used)+' / '+sz(maxb)+'  ('+pct+'%)');
+      var bar=document.getElementById('ph-cache-bar');
+      if(bar){bar.style.width=pct+'%'; bar.className=pct>=90?'hot':(pct>=70?'warn':'');}
+
+      var bd=d.cache_breakdown||{};
+      var items=Object.keys(bd).map(function(k){
+        var v=bd[k], t=(v.hits||0)+(v.misses||0);
+        return {name:k,val:v.bytes,files:v.files,hr:(t?Math.round(v.hits/t*100):null)};
+      }).sort(function(a,b){return b.val-a.val;});
+      txt('ph-cache-tot',items.length+' 类 · '+c.cache_files+' 文件');
+      bars('ph-break',items,function(x){return sz(x.val)+' · '+x.files+'f'+(x.hr!=null?' · 命中'+x.hr+'%':'');});
+
+      var ents=Object.entries(d.requests_by_host).map(function(e){
+        return {name:e[0].replace('.__DOMAIN__','').replace('.docker','\u00b7dk'),val:e[1]};
+      }).sort(function(a,b){return b.val-a.val;});
+      txt('ph-ts',new Date().toLocaleTimeString('zh-CN'));
+      txt('ph-hosts-n',ents.length+' 个活跃域名');
+      bars('ph-hosts',ents,function(x){return x.val;});
+
+      chart(d.history||[]);
+    }).catch(function(){txt('ph-ts','proxyhub 暂不可用');});
+  }
+  load(); setInterval(load,15000);
+  probeLoop(); setInterval(probeLoop,60000);
+})();
+</script>
+</body>
+</html>

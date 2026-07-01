@@ -32,14 +32,14 @@ from .proxies.webcache import GenericCacheProxy, WebCacheProxy
 _STATIC = Path(__file__).parent / "static"
 
 
-def _render_dashboard(cfg) -> str:
-    """Load the bundled dashboard template and substitute branding placeholders
-    so a single image serves any domain — set PROXYHUB_DOMAIN/FOOTER/BRAND."""
+def _render_page(cfg, name: str) -> str:
+    """Load a bundled template and substitute branding placeholders so one image
+    serves any domain — set PROXYHUB_DOMAIN/FOOTER/BRAND."""
     try:
-        html = (_STATIC / "dashboard.html").read_text(encoding="utf-8")
+        html = (_STATIC / name).read_text(encoding="utf-8")
     except FileNotFoundError:
         return ("<!doctype html><meta charset=utf-8><title>proxyhub</title>"
-                "<h1>proxyhub</h1><p>dashboard template not found</p>")
+                "<h1>proxyhub</h1><p>template not found</p>")
     domain = cfg.domain
     if "." in domain:
         head, _, tail = domain.partition(".")
@@ -55,6 +55,81 @@ def _render_dashboard(cfg) -> str:
             .replace("__FOOTERR__", right)   # before __FOOTER__ (prefix collision)
             .replace("__FOOTER__", left)
             .replace("__DOMAIN__", domain))
+
+
+# service name -> (dedicated usage line, all-path suffix) for the markdown docs
+_USAGE = {
+    "npm": ("npm config set registry https://npm.{d}", "npm"),
+    "conda": ("conda config --set channel_alias https://conda.{d}", "conda"),
+    "torch": ("pip install torch --index-url https://torch.{d}/whl/cu121", "torch/whl/cu121"),
+    "goproxy": ("go env -w GOPROXY=https://goproxy.{d},direct", "goproxy"),
+    "hf": ("export HF_ENDPOINT=https://hf.{d}", "hf"),
+    "maven": ("<url>https://maven.{d}</url>   (settings.xml mirror)", "maven"),
+    "gmaven": ("https://gmaven.{d}   (Android Google Maven)", "gmaven"),
+    "gradle": ("https://gradle.{d}   (Gradle plugins)", "gradle"),
+    "apk": ("https://apk.{d}/alpine/v3.19/main   (/etc/apk/repositories)", "apk/alpine/v3.19/main"),
+}
+
+
+def _docs_markdown(cfg) -> str:
+    d = cfg.domain
+    allon = cfg.all_in_one.enabled
+    out = ["# proxyhub — 加速用法\n",
+           f"域名后缀 `{d}`。每个服务有专属子域名；"
+           + (f"`all.{d}/<服务>/…` 是统一入口（私有 docker 源除外）。\n" if allon else "\n")]
+
+    if cfg.docker:
+        out.append("## Docker 镜像\n\n```bash")
+        for n, reg in cfg.docker.items():
+            if reg.username or reg.password:
+                out.append(f"docker login {n}.docker.{d}    # 私有，需登录")
+                out.append(f"docker pull {n}.docker.{d}/<image>")
+            else:
+                out.append(f"docker pull {n}.docker.{d}/<image>")
+                if allon:
+                    out.append(f"docker pull all.{d}/{n}/<image>")
+        out.append("```\n")
+
+    if cfg.github.enabled:
+        out.append("## GitHub\n\n```bash")
+        out.append(f"git clone https://github.{d}/https://github.com/<u>/<r>")
+        if allon:
+            out.append(f"git clone https://all.{d}/github/github.com/<u>/<r>")
+        out.append("```\n")
+
+    if cfg.pypi.enabled:
+        out.append("## PyPI\n\n```bash")
+        out.append(f"pip config set global.index-url https://pypi.{d}/index/")
+        if allon:
+            out.append(f"pip install -i https://all.{d}/pypi/index/ <pkg>")
+        out.append("```\n")
+
+    if cfg.crates.enabled:
+        out.append("## Rust (cargo)\n\n```toml\n# ~/.cargo/config.toml\n[source.crates-io]\n"
+                   "replace-with = \"m\"\n[registries.m]")
+        out.append(f'index = "sparse+https://crates.{d}/"'
+                   + (f'   # 或 all.{d}/crates/' if allon else ""))
+        out.append("```\n")
+
+    web = [n for n in cfg.web if n in _USAGE]
+    if web:
+        out.append("## 语言 / 包镜像\n\n```bash")
+        for n in web:
+            ded, allpath = _USAGE[n]
+            out.append(ded.format(d=d))
+            if allon:
+                out.append(f"#   经 all: https://all.{d}/{allpath}")
+        out.append("```\n")
+
+    if cfg.apt.enabled:
+        out.append("## apt / rpm / apk (host-in-path)\n\n```bash")
+        out.append(f"deb https://apt.{d}/archive.ubuntu.com/ubuntu jammy main")
+        out.append(f"# RPM: baseurl=https://apt.{d}/dl.fedoraproject.org/pub/epel/9/...")
+        out.append("```\n")
+
+    out.append(f"---\n完整实时状态见 https://dash.{d}/ · "
+               "项目 github.com/RandallAnjie/proxies-hub\n")
+    return "\n".join(out)
 
 
 log = logging.getLogger("proxyhub")
@@ -204,7 +279,9 @@ def build_app(cfg: Config) -> web.Application:
         dockers = {n: routes[f"{n}.docker.{cfg.domain}"]
                    for n, reg in cfg.docker.items() if not (reg.username or reg.password)}
         routes[f"all.{cfg.domain}"] = AllProxy(svc, dockers)
-    dashboard_html = _render_dashboard(cfg)
+    monitor_html = _render_page(cfg, "monitor.html")
+    docs_html = _render_page(cfg, "docs.html")
+    docs_md = _docs_markdown(cfg)
     dash_host = f"dash.{cfg.domain}"
 
     async def dispatch(request: web.Request) -> web.StreamResponse:
@@ -228,10 +305,17 @@ def build_app(cfg: Config) -> web.Application:
         host = request.host.split(":")[0]
         proxy = routes.get(host)
         if proxy is None:
-            # serve the dashboard at the dash host, or at "/" of any unknown host
-            # (so a bare `docker run -p 8080:8080` lands on a working page)
+            # docs page: HTML for browsers, Markdown for curl/wget/no-UA
+            if request.path == "/docs":
+                ua = request.headers.get("User-Agent", "").lower()
+                if (not ua) or "curl" in ua or "wget" in ua:
+                    return web.Response(text=docs_md, content_type="text/markdown",
+                                        charset="utf-8")
+                return web.Response(text=docs_html, content_type="text/html")
+            # monitoring at "/" (dash host, or "/" of any unknown host so a bare
+            # `docker run -p 8080:8080` lands on a working page)
             if host == dash_host or request.path == "/":
-                return web.Response(text=dashboard_html, content_type="text/html")
+                return web.Response(text=monitor_html, content_type="text/html")
             return web.Response(status=404, text=f"no route for host: {host}\n")
         reqs[host] += 1
         try:

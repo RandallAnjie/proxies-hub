@@ -109,41 +109,7 @@
     <button class="toggle" id="t" title="切换主题" aria-label="切换主题">◐</button>
   </header>
 
-  <p class="lead">把原始地址换成下面的代理地址即可。大文件首次拉取由服务器全速缓存、之后走本地，不会因为慢被掐断。登录凭据向管理员获取。</p>
-
-  <section class="reveal" id="phstatus">
-    <div class="sechead"><span class="no">PH</span><h2>proxyhub 实时监控</h2><span class="hint" id="ph-ts">—</span></div>
-    <div class="statbar">
-      <div class="stat"><div class="k">运行</div><div class="v" id="ph-up">—</div></div>
-      <div class="stat"><div class="k">命中率 10分钟</div><div class="v" id="ph-hit">—</div></div>
-      <div class="stat"><div class="k">请求总数</div><div class="v" id="ph-req">—</div></div>
-      <div class="stat"><div class="k">已服务</div><div class="v" id="ph-served">—</div></div>
-      <div class="stat"><div class="k">缓存文件</div><div class="v" id="ph-files">—</div></div>
-      <div class="stat"><div class="k">校验失败</div><div class="v" id="ph-vf">—</div></div>
-      <div class="stat"><div class="k">索引重验</div><div class="v" id="ph-rv">—</div></div>
-      <div class="stat"><div class="k">Pin</div><div class="v" id="ph-pin">—</div></div>
-    </div>
-
-    <div class="chart">
-      <div class="ct"><span>命中率 · 近 24 小时 <small>(每格 1 小时)</small></span><span>本小时 <b id="ph-chart-now">—</b></span></div>
-      <svg id="ph-chart" viewBox="0 0 600 120" preserveAspectRatio="none"></svg>
-    </div>
-
-    <div class="bars" style="margin-top:16px">
-      <div class="bar"><div class="bl"><span>缓存用量</span><span id="ph-cache-l">—</span></div><div class="track"><i id="ph-cache-bar"></i></div></div>
-    </div>
-
-    <div class="subhead"><h3>缓存占用 · 单一共享池（按服务）</h3><span class="hint" id="ph-cache-tot">—</span></div>
-    <p class="note" style="margin:0 0 12px">所有服务共用<strong>一个</strong>缓存池，按 key 前缀隔离（docker 各源、各包镜像各自独立计量），淘汰统一走 LRU + 保护窗口 + pin。下面是各服务实际占用：</p>
-    <div class="bars" id="ph-break"></div>
-
-    <div class="subhead"><h3>域名探测 · 端到端</h3><span class="hint" id="ph-probes-n">每 5 分钟</span></div>
-    <div class="dots" id="ph-probes"></div>
-
-    <div class="subhead"><h3>请求量 · 按域名</h3><span class="hint" id="ph-hosts-n">—</span></div>
-    <div class="bars" id="ph-hosts"></div>
-  </section>
-
+  <p class="lead">加速服务用法 · <a class="dom" href="/">← 实时监控</a>。<strong>只列出你当前可达的域名</strong>；每个服务给出专属域名与 all 统一入口两种方式。</p>
 
   <div id="ph-svc"></div>
 
