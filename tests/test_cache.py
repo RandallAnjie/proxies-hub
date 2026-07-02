@@ -152,6 +152,60 @@ def test_fill_concurrency_capped():
     asyncio.run(go())
 
 
+def test_queued_fill_aborts_when_no_waiters():
+    """A fill still queued for a slot gives up if every waiting client is gone —
+    the root of .part pile-up: downloads nobody asked for."""
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9, max_concurrent_fills=1)
+            release = asyncio.Event()
+            called = {"b": False}
+
+            def slow():          # occupies the only slot until released
+                async def g():
+                    yield CacheMeta(key="", size=-1, content_type="x"), b""
+                    await release.wait()
+                    yield None, b"A"
+                return g
+
+            def never():         # must NOT run if its waiter disconnected
+                async def g():
+                    called["b"] = True
+                    yield CacheMeta(key="", size=-1, content_type="x"), b""
+                    yield None, b"B"
+                return g
+
+            a = asyncio.create_task(c.stream("A", slow()))
+            await asyncio.sleep(0.05)                   # A holds the slot
+            b = asyncio.create_task(c.stream("B", never()))
+            await asyncio.sleep(0.05)                   # B queued, waiting
+            b.cancel()                                  # client disconnects
+            try:
+                await b
+            except asyncio.CancelledError:
+                pass
+            release.set()                               # A finishes -> slot frees
+            meta, it = await a
+            assert await _collect(it) == b"A"
+            for _ in range(100):                        # let B's task run/abort
+                await asyncio.sleep(0.01)
+                if c.stats()["aborted_fills"]:
+                    break
+            assert called["b"] is False                 # never touched upstream
+            assert c.stats()["aborted_fills"] == 1
+            assert c.lookup("B") is None
+            # a NEW request for B after the abort works normally
+            def fresh():
+                async def g():
+                    yield CacheMeta(key="", size=-1, content_type="x"), b""
+                    yield None, b"B2"
+                return g
+            _, it2 = await c.stream("B", fresh())
+            assert await _collect(it2) == b"B2"
+
+    asyncio.run(go())
+
+
 def test_docker_blob_grouped_as_shared_layers():
     with tempfile.TemporaryDirectory() as d:
         c = DiskCache(d, max_bytes=10**9)

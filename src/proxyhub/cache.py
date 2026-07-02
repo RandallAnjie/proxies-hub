@@ -29,6 +29,10 @@ class IntegrityError(Exception):
     """A filled object failed its expected-digest check; it is not cached."""
 
 
+class _FillAborted(Exception):
+    """A queued fill reached the front of the line with no one waiting for it."""
+
+
 @dataclass
 class CacheMeta:
     key: str
@@ -49,6 +53,7 @@ class _Download:
         self.done = False
         self.error: Optional[BaseException] = None
         self.size = 0
+        self.waiters = 0          # clients currently waiting on this fill
         self._event = asyncio.Event()
 
     def notify(self):
@@ -82,6 +87,7 @@ class DiskCache:
         self._pins = [re.compile(p) for p in (pin_patterns or [])]
         self.verify_failures = 0
         self.revalidations = 0
+        self.aborted_fills = 0    # queued fills dropped because no one waited
         self._inflight: dict[str, _Download] = {}
         self._lock = asyncio.Lock()
         # cap concurrent upstream fetches so N big layers don't split the link
@@ -261,6 +267,8 @@ class DiskCache:
             "cache_files": len(self._index),
             "verify_failures": self.verify_failures,
             "revalidations": self.revalidations,
+            "aborted_fills": self.aborted_fills,
+            "inflight_fills": len(self._inflight),
             "pins": len(self._pins),
         }
 
@@ -413,8 +421,16 @@ class DiskCache:
 
     # ---- internals ----
     async def _await_meta(self, dl: _Download):
-        while dl.meta is None and not dl.done and dl.error is None:
-            await dl.wait()
+        # waiter count keeps the fill alive: if every waiting client disconnects
+        # (aiohttp cancels the handler -> CancelledError -> finally) while the
+        # fill is still QUEUED for a slot, the fill gives up instead of
+        # downloading data nobody asked for.
+        dl.waiters += 1
+        try:
+            while dl.meta is None and not dl.done and dl.error is None:
+                await dl.wait()
+        finally:
+            dl.waiters -= 1
         if dl.error is not None:
             raise dl.error
         if dl.meta is None:
@@ -461,6 +477,13 @@ class DiskCache:
             # gate the actual upstream fetch: queued fills wait here for a slot,
             # so a burst of layers doesn't split the link into a dead trickle
             async with self._fill_sem:
+                # nobody is waiting anymore (every client disconnected while we
+                # were queued) -> abort before downloading a single byte. A fill
+                # that already STARTED keeps going (cache investment, capped by
+                # the semaphore); retries join it via _inflight.
+                if dl.waiters == 0:
+                    self.aborted_fills += 1
+                    raise _FillAborted(key)
                 gen = filler()
                 meta, first = await gen.__anext__()
                 if meta is None:
