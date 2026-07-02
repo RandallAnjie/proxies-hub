@@ -246,7 +246,8 @@ def build_app(cfg: Config) -> web.Application:
     cache = DiskCache(cfg.cache_dir, cfg.cache_max_bytes,
                       protect_window=cfg.cache_protect_window,
                       low_water_ratio=cfg.cache_low_water,
-                      pin_patterns=cfg.cache_pin)
+                      pin_patterns=cfg.cache_pin,
+                      max_concurrent_fills=cfg.cache_max_fills)
     routes: dict[str, object] = {}
     reqs: Counter = Counter()
     started = time.time()

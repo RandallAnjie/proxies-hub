@@ -67,7 +67,8 @@ class _Download:
 
 class DiskCache:
     def __init__(self, root: str, max_bytes: int, protect_window: int = 600,
-                 low_water_ratio: float = 0.92, pin_patterns: Optional[list] = None):
+                 low_water_ratio: float = 0.92, pin_patterns: Optional[list] = None,
+                 max_concurrent_fills: int = 8):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.max_bytes = max_bytes
@@ -83,6 +84,10 @@ class DiskCache:
         self.revalidations = 0
         self._inflight: dict[str, _Download] = {}
         self._lock = asyncio.Lock()
+        # cap concurrent upstream fetches so N big layers don't split the link
+        # into a useless trickle (each queued fill waits for a free slot)
+        self._fill_sem = asyncio.Semaphore(max_concurrent_fills)
+        self.max_fills = max_concurrent_fills
         # metrics
         self.hits = 0
         self.misses = 0
@@ -453,39 +458,42 @@ class DiskCache:
         # bytes can be checked against the expected digest before we commit.
         h = hashlib.sha256() if verify else None
         try:
-            gen = filler()
-            meta, first = await gen.__anext__()
-            if meta is None:
-                raise RuntimeError("filler must yield metadata first")
-            meta.key = key
-            with open(part_p, "wb") as f:
-                if first:
-                    f.write(first)
-                    dl.size = len(first)
-                    if h:
-                        h.update(first)
-                dl.meta = meta
-                dl.notify()
-                async for _, chunk in gen:
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    dl.size += len(chunk)
-                    if h:
-                        h.update(chunk)
+            # gate the actual upstream fetch: queued fills wait here for a slot,
+            # so a burst of layers doesn't split the link into a dead trickle
+            async with self._fill_sem:
+                gen = filler()
+                meta, first = await gen.__anext__()
+                if meta is None:
+                    raise RuntimeError("filler must yield metadata first")
+                meta.key = key
+                with open(part_p, "wb") as f:
+                    if first:
+                        f.write(first)
+                        dl.size = len(first)
+                        if h:
+                            h.update(first)
+                    dl.meta = meta
                     dl.notify()
-            if h is not None and h.hexdigest() != verify:
-                self.verify_failures += 1
-                raise IntegrityError(
-                    f"sha256 mismatch for {key}: got {h.hexdigest()[:16]} want {verify[:16]}")
-            meta.size = dl.size
-            meta.total = dl.size
-            os.replace(part_p, data_p)
-            meta_p.write_text(json.dumps(meta.__dict__))
-            self._record(key, dl.size)
-            dl.done = True
-            dl.notify()
-            await self._enforce_limit()
+                    async for _, chunk in gen:
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        dl.size += len(chunk)
+                        if h:
+                            h.update(chunk)
+                        dl.notify()
+                if h is not None and h.hexdigest() != verify:
+                    self.verify_failures += 1
+                    raise IntegrityError(
+                        f"sha256 mismatch for {key}: got {h.hexdigest()[:16]} want {verify[:16]}")
+                meta.size = dl.size
+                meta.total = dl.size
+                os.replace(part_p, data_p)
+                meta_p.write_text(json.dumps(meta.__dict__))
+                self._record(key, dl.size)
+                dl.done = True
+                dl.notify()
+                await self._enforce_limit()
         except BaseException as e:  # noqa: BLE001
             dl.error = e
             dl.done = True

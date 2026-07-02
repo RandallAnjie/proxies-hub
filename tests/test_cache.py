@@ -125,6 +125,33 @@ def test_persistent_index_survives_reopen():
     asyncio.run(go())
 
 
+def test_fill_concurrency_capped():
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9, max_concurrent_fills=2)
+            cur = {"n": 0, "max": 0}
+
+            def mk():
+                async def g():
+                    cur["n"] += 1
+                    cur["max"] = max(cur["max"], cur["n"])
+                    yield CacheMeta(key="", size=-1, content_type="x"), b""
+                    for _ in range(5):
+                        await asyncio.sleep(0.02)
+                        yield None, b"data"
+                    cur["n"] -= 1
+                return lambda: g()
+
+            async def one(k):
+                _, it = await c.stream(k, mk())
+                await _collect(it)
+
+            await asyncio.gather(*[one(f"k{i}") for i in range(6)])
+            assert cur["max"] <= 2          # never more than the cap in flight
+
+    asyncio.run(go())
+
+
 def test_docker_blob_grouped_as_shared_layers():
     with tempfile.TemporaryDirectory() as d:
         c = DiskCache(d, max_bytes=10**9)
