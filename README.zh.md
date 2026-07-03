@@ -31,13 +31,22 @@ nginx + distribution-registry + ghproxy 一整套东西。基于 aiohttp 异步�
   所以跨仓库/跨源共享的同一层**只存一份**。按 tag 的 manifest 用 `If-None-Match` 重验
   (`304` → 走缓存)。
 - **digest 完整性校验**:blob 边填边算 sha256,提交前与其 digest 比对——截断/损坏的
-  回源绝不入缓存。
-- **智能淘汰**:LRU 淘汰到 low-water 水位(不在边界抖动);保护窗口内用过的条目最后才
-  淘汰;`pin` 正则的永不淘汰。残留的 `.part`/`.rv` 半成品在**启动时**和**每 10 分钟**清扫。
-- **条件重验**(`webcache.py`):又大又不常变的索引(conda repodata、npm 元数据、cargo
-  index)带 ETag 缓存,`304` 时直接给缓存——既新鲜,又不重复下载。
+  回源绝不入缓存。更进一步,**非 200 响应永不落缓存**:上游瞬时 401/500 会(从内存)
+  流给客户端,但不可能污染这个 key。
+- **回源并发上限**:同时最多 `max_concurrent_fills` 路回源(N 个层全速,而不是 60 个层
+  一起龟速);**排队中所有等待者都断开的回源会在下载前直接放弃**。
+- **智能淘汰**:LRU 淘汰到 low-water 水位(索引 dict 本身就是 LRU 序——零排序);保护
+  窗口内的最后才淘汰;`pin` 正则的永不淘汰;**单服务 `quotas` 配额**——某个被刷爆的服务
+  (比如 5.7 万文件的 Alpine 全量爬取)只淘汰自己的,挤不掉别人的热数据。残留半成品
+  启动时和每 10 分钟清扫。
+- **条件重验**(`webcache.py`):大而稳的索引带 ETag 缓存,`304` 直接给缓存;上游
+  `5xx/429` 时改为**送出缓存副本(stale-if-error)**而不是跟着挂。
+- **廉价鉴权**:registry 的 `WWW-Authenticate` 挑战按进程缓存、scope 从仓库路径推导——
+  401 探测每进程一次而非每请求一次;token 按 scope 缓存,传输中过期自动续。
 - **GitHub**:全连接类型(git clone smart-HTTP、raw、归档、release 资产);`?token=别名`
-  在服务端换成真实 PAT;私有 release 翻译成 API 资产端点,普通 URL 也能下。
+  服务端换真实 PAT;私有 release 翻译成 API 资产端点;**release 资产按
+  `id:updated_at` 缓存**(每次请求仍先过 API 鉴权;250MB 资产第二台机器 25s → 2s 内)。
+- **统计跨重启持久化**(`.stats.json`):计数器、每服务命中率、小时图不再因重新部署清零。
 
 ## 统一入口 all
 
@@ -85,6 +94,7 @@ docker run -p 8080:8080 -v cache:/var/cache/proxyhub \
 | `PROXYHUB_CACHE_MAX` | 缓存上限(如 `250g`) | `50g` |
 | `PROXYHUB_HOST` / `PROXYHUB_PORT` | 监听地址 | `0.0.0.0:8080` |
 | `PROXYHUB_CACHE_DIR` | 缓存目录 | `/var/cache/proxyhub` |
+| `PROXYHUB_MAX_FILLS` | 回源并发上限 | `8` |
 
 源码运行:`pip install -r requirements.txt && PYTHONPATH=src python -m proxyhub -c config.yaml`
 (`${GHCR_PAT}` / `${GITHUB_PAT}` 等密钥从环境变量读)。

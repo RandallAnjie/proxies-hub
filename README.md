@@ -34,16 +34,32 @@ slow client can never cause an upstream connection to time out mid-transfer.
   by their sha256 alone, so a layer shared across repos/registries is stored
   once. By-tag manifests are revalidated with `If-None-Match` (`304` → cached).
 - **Digest integrity**: a blob is hashed while it fills and checked against its
-  digest before commit — a truncated/corrupt fetch is never cached.
-- **Smart eviction**: LRU to a low-water mark (no boundary thrash); entries used
-  within `protect_window` are evicted only as a last resort; `pin` regexes never
-  evicted. Abandoned `.part`/`.rv` partials are swept on startup and every 10 min.
+  digest before commit — a truncated/corrupt fetch is never cached. More
+  broadly, **non-200 responses are never committed**: a transient upstream
+  401/500 streams to the client (from memory) but can't poison the key.
+- **Bounded concurrency**: at most `max_concurrent_fills` upstream fetches run
+  at once (N layers at full speed instead of 60 at a trickle); a **queued fill
+  whose waiters all disconnected is aborted** before it downloads a byte.
+- **Smart eviction**: LRU to a low-water mark (no boundary thrash; the index
+  dict *is* the LRU order — no sorting); `protect_window` entries go last;
+  `pin` regexes never evicted; **per-service `quotas`** stop one flooded
+  service (a 57k-file Alpine crawl, say) from evicting everyone else.
+  Abandoned partials are swept on startup and every 10 min.
 - **Conditional revalidation** (`webcache.py`): big-but-stable indexes (conda
   repodata, npm metadata, cargo index) are cached *with* their ETag and served
-  on a `304` — fresh, but unchanged indexes aren't re-downloaded.
+  on a `304`; on upstream `5xx/429` the cached copy is served
+  (**stale-if-error**) instead of failing.
+- **Cheap auth**: the registry's `WWW-Authenticate` challenge is cached per
+  process and the scope derived from the repo path — the 401 probe happens
+  once, not per request; tokens are cached per scope and refreshed mid-transfer
+  on expiry.
 - **GitHub**: every connection type (git clone smart-HTTP, raw, archives, release
-  assets), `?token=alias` swapped server-side for a real PAT, and private
-  releases translated to the API asset endpoint so the plain URL just works.
+  assets), `?token=alias` swapped server-side for a real PAT, private releases
+  translated to the API asset endpoint — and **release assets cached** under
+  `id:updated_at` (authorization still checked per request; a 250 MB asset
+  drops from 25 s to under 2 s for the next machine).
+- **Stats survive restarts** (`.stats.json`): counters, per-service hit rates
+  and the hourly chart don't reset on redeploy.
 
 ## All-in-one entrypoint
 
@@ -95,6 +111,7 @@ scalars via env without touching the file:
 | `PROXYHUB_CACHE_MAX` | cache cap (e.g. `250g`) | `50g` |
 | `PROXYHUB_HOST` / `PROXYHUB_PORT` | bind address | `0.0.0.0:8080` |
 | `PROXYHUB_CACHE_DIR` | cache directory | `/var/cache/proxyhub` |
+| `PROXYHUB_MAX_FILLS` | max concurrent upstream fills | `8` |
 
 From source: `pip install -r requirements.txt && PYTHONPATH=src python -m proxyhub -c config.yaml`
 (secrets like `${GHCR_PAT}` / `${GITHUB_PAT}` are read from the environment).
