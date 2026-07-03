@@ -2,16 +2,22 @@
 
 * Decoupled buffering: one background task downloads at server speed into a
   ``.part`` file while any number of clients stream from the growing file.
-* Persistent LRU index: ``.index.json`` tracks {digest: size, atime}; eviction
-  pops the least-recently-used entry instead of walking the whole tree.
+* Persistent LRU index: the in-memory dict is kept in LRU order (re-inserted on
+  every touch), so eviction walks from the front — no sorting. It is flushed to
+  ``.index.json`` asynchronously and throttled (rewriting a 50k-entry JSON on
+  every store used to burn CPU and terabytes of writes).
+* Correctness: only ``200`` bodies are ever committed (a transient upstream
+  401/500 can't poison a key); docker blobs are verified against their digest.
+* Quotas: optional per-service byte caps so one flooding service (someone
+  mirroring all of Alpine) can't evict everyone else's hot objects.
 * Range: cached objects serve byte ranges (206); a ranged miss still fills the
   full object (caching it) and serves the requested slice from the growing file.
-* Metrics: hits / misses / bytes for the /status endpoint.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -54,6 +60,9 @@ class _Download:
         self.error: Optional[BaseException] = None
         self.size = 0
         self.waiters = 0          # clients currently waiting on this fill
+        # a non-200 response is never written to disk: its (small) body is
+        # buffered here so attached readers can still deliver it
+        self.mem: Optional[bytearray] = None
         self._event = asyncio.Event()
 
     def notify(self):
@@ -73,7 +82,7 @@ class _Download:
 class DiskCache:
     def __init__(self, root: str, max_bytes: int, protect_window: int = 600,
                  low_water_ratio: float = 0.92, pin_patterns: Optional[list] = None,
-                 max_concurrent_fills: int = 8):
+                 max_concurrent_fills: int = 8, quotas: Optional[dict] = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.max_bytes = max_bytes
@@ -85,6 +94,8 @@ class DiskCache:
         self.protect_window = protect_window
         # keys matching any of these are never evicted (e.g. base images)
         self._pins = [re.compile(p) for p in (pin_patterns or [])]
+        # optional per-service byte caps: {group_label: max_bytes}
+        self.quotas = dict(quotas or {})
         self.verify_failures = 0
         self.revalidations = 0
         self.aborted_fills = 0    # queued fills dropped because no one waited
@@ -100,38 +111,77 @@ class DiskCache:
         self.bytes_served = 0
         self.started = time.time()
         self._svc: dict[str, list] = {}          # service -> [hits, misses]
-        # persistent LRU index: digest -> {"key","size","atime"}
+        # persistent LRU index: digest -> {"key","size","atime"}; the DICT ORDER
+        # is the LRU order (entries are re-inserted on every touch)
         self._index: dict[str, dict] = {}
         self._total = 0
+        self._groups: dict[str, list] = {}       # group -> [files, bytes]
         self._index_path = self.root / ".index.json"
+        # flush throttling: mark-dirty + periodic/async write instead of
+        # rewriting the whole index JSON synchronously on every store
         self._dirty = 0
-        self._cleanup_partials()
+        self._last_flush = time.time()
+        self._flushing = False
+        self._rv_seq = itertools.count()
         self._load_index()
+        self._reconcile()
 
-    def _cleanup_partials(self):
-        """At startup no fill is in flight, so any leftover ``.part``/``.rv`` is an
-        abandoned partial from a killed run. It is untracked by the index, so LRU
-        would never reclaim it — delete it now to stop slow disk leakage."""
-        removed = freed = 0
+    # ---- startup reconcile ----
+    def _reconcile(self):
+        """One startup walk that (a) deletes abandoned ``.part``/``.rv`` partials
+        (no fill is in flight yet, so any partial is stale), (b) adds data files
+        the index doesn't know about (a crash can lose recent index writes now
+        that flushing is throttled) and (c) drops index entries whose file is
+        gone. Keeps the index truthful so eviction accounting never drifts."""
+        removed = freed = adopted = 0
+        seen: set[str] = set()
         for p in self.root.rglob("*"):
-            if p.is_file() and p.name.endswith((".part", ".rv")):
+            if not p.is_file():
+                continue
+            name = p.name
+            if name.endswith((".part", ".rv")):
                 try:
                     freed += p.stat().st_size
                     p.unlink()
                     removed += 1
                 except OSError:
                     pass
-        if removed:
-            log.info("cleaned %d stale partial file(s), freed %.1f MB",
-                     removed, freed / 1024 / 1024)
+                continue
+            if name.endswith(".meta") or name == ".index.json" or name.endswith(".tmp"):
+                continue
+            seen.add(name)
+            if name not in self._index:
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                meta_p = p.with_name(name + ".meta")
+                key = ""
+                try:
+                    key = json.loads(meta_p.read_text()).get("key", "")
+                except Exception:
+                    pass
+                self._index[name] = {"key": key, "size": st.st_size, "atime": st.st_atime}
+                self._total += st.st_size
+                self._grp_add(key, st.st_size)
+                adopted += 1
+        for digest in [d for d in self._index if d not in seen]:
+            e = self._index.pop(digest)
+            self._total -= e["size"]
+            self._grp_sub(e.get("key", ""), e["size"])
+        if removed or adopted:
+            log.info("reconcile: removed %d stale partial(s) (%.1f MB), "
+                     "adopted %d untracked file(s)", removed, freed / 1024 / 1024, adopted)
+        self.flush_sync()
 
-    def sweep_partials(self, min_age: int = 600) -> int:
+    def sweep_partials(self, min_age: int = 600, active: Optional[set] = None) -> int:
         """Periodic reaper for partials a *still-running* process can accumulate
-        (e.g. a revalidation whose client vanished mid-stream). Safe while fills
-        are active: skips any file backing an in-flight fill, and only removes
-        ones untouched for ``min_age`` seconds — an active fill refreshes its
-        ``.part`` mtime on every chunk, so a slow-but-live fetch is never hit."""
-        active = {str(dl.part_path) for dl in self._inflight.values()}
+        (e.g. a revalidation whose client vanished mid-stream). ``active`` is a
+        snapshot of in-flight fill paths taken on the event loop (this method
+        runs in an executor thread; it must not touch loop-owned state). Only
+        removes files untouched for ``min_age`` seconds — an active fill
+        refreshes its ``.part`` mtime on every chunk."""
+        active = active or set()
         now = time.time()
         removed = freed = 0
         for p in self.root.rglob("*"):
@@ -152,6 +202,10 @@ class DiskCache:
                      removed, freed / 1024 / 1024)
         return removed
 
+    def active_partials(self) -> set:
+        """Snapshot of in-flight partial paths — call on the event loop."""
+        return {str(dl.part_path) for dl in self._inflight.values()}
+
     # ---- paths ----
     def _digest(self, key: str) -> str:
         return hashlib.sha256(key.encode()).hexdigest()
@@ -166,52 +220,97 @@ class DiskCache:
         if self._index_path.exists():
             try:
                 doc = json.loads(self._index_path.read_text())
-                self._index = doc["entries"]
+                self._index = doc["entries"]     # saved in LRU order
                 self._total = int(doc["total"])
+                for e in self._index.values():
+                    self._grp_add(e.get("key", ""), e.get("size", 0))
                 return
             except Exception:
-                pass
-        self._rebuild_index()
+                self._index, self._total, self._groups = {}, 0, {}
 
-    def _rebuild_index(self):
-        self._index, self._total = {}, 0
-        for p in self.root.rglob("*"):
-            if p.is_file() and not p.name.endswith((".meta", ".part")) and p.name != ".index.json":
-                try:
-                    st = p.stat()
-                except FileNotFoundError:
-                    continue
-                self._index[p.name] = {"key": "", "size": st.st_size, "atime": st.st_atime}
-                self._total += st.st_size
-        self._flush(force=True)
-
-    def _flush(self, force=False):
-        self._dirty += 1
-        if not force and self._dirty < 50:
-            return
-        self._dirty = 0
+    def _write_index(self, snapshot: dict, total: int):
+        # runs in an executor thread; snapshot's structure is frozen (shallow
+        # copy on the loop), inner atime updates are harmless value swaps
         try:
             tmp = self._index_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"total": self._total, "entries": self._index}))
+            tmp.write_text(json.dumps({"total": total, "entries": snapshot}))
             os.replace(tmp, self._index_path)
         except Exception:
             pass
 
+    def flush_sync(self):
+        """Synchronous full flush — startup/shutdown/tests."""
+        self._dirty = 0
+        self._last_flush = time.time()
+        self._write_index(dict(self._index), self._total)
+
+    async def flush_async(self):
+        """Throttle-aware async flush: snapshot on the loop, write off-loop."""
+        if self._flushing:
+            return
+        if self._dirty == 0:
+            return
+        self._flushing = True
+        try:
+            snap = dict(self._index)
+            total = self._total
+            self._dirty = 0
+            self._last_flush = time.time()
+            await asyncio.get_running_loop().run_in_executor(
+                None, self._write_index, snap, total)
+        finally:
+            self._flushing = False
+
+    def _mark_dirty(self):
+        self._dirty += 1
+        # safety valve: if a flood outpaces the periodic flush, self-schedule
+        if self._dirty >= 2000 and not self._flushing:
+            try:
+                asyncio.get_running_loop().create_task(self.flush_async())
+            except RuntimeError:
+                self.flush_sync()          # no loop (tests) -> sync
+
+    # ---- group accounting ----
+    def _grp_add(self, key: str, size: int):
+        g = self._groups.setdefault(self._group_label(key), [0, 0])
+        g[0] += 1
+        g[1] += size
+
+    def _grp_sub(self, key: str, size: int):
+        g = self._groups.get(self._group_label(key))
+        if g:
+            g[0] -= 1
+            g[1] -= size
+
     def _record(self, key: str, size: int):
         d = self._digest(key)
-        old = self._index.get(d)
+        old = self._index.pop(d, None)
         if old:
             self._total -= old["size"]
+            self._grp_sub(old.get("key", key), old["size"])
         self._index[d] = {"key": key, "size": size, "atime": time.time()}
         self._total += size
-        self._flush(force=True)   # persist new entries immediately
+        self._grp_add(key, size)
+        self._mark_dirty()
 
     def _bump(self, key: str):
         d = self._digest(key)
-        e = self._index.get(d)
+        e = self._index.pop(d, None)
         if e:
             e["atime"] = time.time()
-            self._flush()
+            self._index[d] = e            # re-insert -> back of the LRU order
+            self._mark_dirty()
+
+    def _drop(self, key: str):
+        """Remove a cached entry (files + index) — e.g. a legacy poisoned one."""
+        d = self._digest(key)
+        e = self._index.get(d)
+        if e is not None:
+            self._evict(d, e)
+        else:
+            data_p, meta_p, _ = self._paths(key)
+            data_p.unlink(missing_ok=True)
+            meta_p.unlink(missing_ok=True)
 
     def _is_pinned(self, key: str) -> bool:
         return bool(key) and any(p.search(key) for p in self._pins)
@@ -240,20 +339,24 @@ class DiskCache:
         return p0  # pypi, apt, …
 
     def breakdown(self) -> dict:
-        """Per-service {files, bytes, hits, misses} — size from the on-disk index,
-        hit/miss from the live counters."""
+        """Per-service {files, bytes, hits, misses, quota} from incremental
+        accounting (no index walk)."""
         groups: dict[str, dict] = {}
 
         def g(label):
             return groups.setdefault(label, {"files": 0, "bytes": 0, "hits": 0, "misses": 0})
 
-        for e in self._index.values():
-            grp = g(self._group_label(e.get("key", "") or ""))
-            grp["files"] += 1
-            grp["bytes"] += int(e.get("size", 0))
+        for label, (files, size) in self._groups.items():
+            if files <= 0 and size <= 0:
+                continue
+            grp = g(label)
+            grp["files"], grp["bytes"] = files, size
         for svc, (h, m) in self._svc.items():
             grp = g(svc)
             grp["hits"], grp["misses"] = h, m
+        for label, q in self.quotas.items():
+            if label in groups:
+                groups[label]["quota"] = q
         return groups
 
     def stats(self) -> dict:
@@ -270,6 +373,7 @@ class DiskCache:
             "aborted_fills": self.aborted_fills,
             "inflight_fills": len(self._inflight),
             "pins": len(self._pins),
+            "quotas": self.quotas,
         }
 
     # ---- lookup ----
@@ -278,10 +382,15 @@ class DiskCache:
         if data_p.exists() and meta_p.exists():
             try:
                 m = json.loads(meta_p.read_text())
-                self._bump(key)
-                return CacheMeta(**m)
             except Exception:
                 return None
+            if m.get("status", 200) != 200:
+                # legacy poisoned entry (an upstream error body cached before
+                # non-200 responses were rejected) — purge it
+                self._drop(key)
+                return None
+            self._bump(key)
+            return CacheMeta(**m)
         return None
 
     def peek(self, key: str) -> Optional[CacheMeta]:
@@ -290,7 +399,10 @@ class DiskCache:
         data_p, meta_p, _ = self._paths(key)
         if data_p.exists() and meta_p.exists():
             try:
-                return CacheMeta(**json.loads(meta_p.read_text()))
+                m = json.loads(meta_p.read_text())
+                if m.get("status", 200) != 200:
+                    return None
+                return CacheMeta(**m)
             except Exception:
                 return None
         return None
@@ -300,9 +412,11 @@ class DiskCache:
                      verify: Optional[str] = None):
         meta = self.lookup(key)
         if meta is not None:
-            self.hits += 1
-            self._svc_bump(key, True)
-            return meta, self._read_file(key, 0, meta.size - 1)
+            it = self._read_file(key, 0, meta.size - 1)
+            if it is not None:                       # evicted in the window -> miss
+                self.hits += 1
+                self._svc_bump(key, True)
+                return meta, it
         self.misses += 1
         self._svc_bump(key, False)
         if not cacheable:
@@ -323,12 +437,13 @@ class DiskCache:
         """Serve bytes [start, end]. Returns (206-meta, iterator)."""
         meta = self.lookup(key)
         if meta is not None:
-            self.hits += 1
-            self._svc_bump(key, True)
             total = meta.size
             real_end = total - 1 if end is None or end >= total else end
-            m = self._range_meta(meta, start, real_end, total)
-            return m, self._read_file(key, start, real_end)
+            it = self._read_file(key, start, real_end)
+            if it is not None:
+                self.hits += 1
+                self._svc_bump(key, True)
+                return self._range_meta(meta, start, real_end, total), it
 
         self.misses += 1
         self._svc_bump(key, False)
@@ -348,31 +463,55 @@ class DiskCache:
     async def stream_revalidate(self, key: str, filler: Filler,
                                 cached: CacheMeta, verify: Optional[str] = None):
         """For a cached entry with validators: run a conditional upstream request
-        (the ``filler`` must carry If-None-Match / If-Modified-Since). If upstream
-        answers ``304`` serve the cached body; otherwise stream + re-cache the new
-        body. Keeps indexes fresh without re-downloading unchanged ones."""
+        (the ``filler`` must carry If-None-Match / If-Modified-Since).
+
+        * ``304``  -> serve the cached body (fresh, no re-download)
+        * ``200``  -> stream the new body to the client while re-caching it
+        * ``5xx``/``429`` -> serve the cached body (stale-if-error: a flaky
+          upstream must not take down objects we already hold)
+        * other 4xx -> stream through, cache untouched
+        """
         self.revalidations += 1
         gen = filler()
         meta, first = await gen.__anext__()
         if meta is None:
             raise RuntimeError("filler must yield metadata first")
-        if meta.status == 304:
-            async for _ in gen:    # drain (no body, but release the connection)
-                pass
-            self.hits += 1
-            self._svc_bump(key, True)
-            self._bump(key)
-            return cached, self._read_file(key, 0, cached.size - 1)
 
-        # changed (200, or anything else) — stream to the client while writing a
-        # fresh copy, then atomically replace the cached entry.
+        if meta.status == 304 or meta.status >= 500 or meta.status == 429:
+            async for _ in gen:    # drain (release the upstream connection)
+                pass
+            it = self._read_file(key, 0, cached.size - 1)
+            if it is not None:
+                self.hits += 1
+                self._svc_bump(key, True)
+                self._bump(key)
+                return cached, it
+            raise RuntimeError(f"cached body for {key} vanished during revalidation")
+
+        if meta.status != 200:
+            # gone/forbidden upstream: pass it through, keep our copy untouched
+            async def passthrough():
+                if first:
+                    self.bytes_served += len(first)
+                    yield first
+                async for _, c in gen:
+                    if c:
+                        self.bytes_served += len(c)
+                        yield c
+            self.misses += 1
+            self._svc_bump(key, False)
+            return meta, passthrough()
+
+        # changed (200) — stream to the client while writing a fresh copy, then
+        # atomically replace the cached entry. Unique temp name: two concurrent
+        # revalidations of one key must not interleave writes.
         self.misses += 1
         self._svc_bump(key, False)
         meta.key = key
         if meta.total is not None and meta.total >= 0:
             meta.size = meta.total
         data_p, meta_p, part_p = self._paths(key)
-        rv = part_p.with_name(part_p.name + ".rv")
+        rv = part_p.with_name(f"{part_p.name}.{next(self._rv_seq)}.rv")
         rv.parent.mkdir(parents=True, exist_ok=True)
 
         async def body():
@@ -405,6 +544,7 @@ class DiskCache:
                 os.replace(rv, data_p)
                 meta_p.write_text(json.dumps(m.__dict__))
                 self._record(key, size)
+                await self._enforce_quota(key)
                 await self._enforce_limit()
             except BaseException:
                 rv.unlink(missing_ok=True)
@@ -457,7 +597,9 @@ class DiskCache:
                      verify: Optional[str] = None) -> _Download:
         async with self._lock:
             dl = self._inflight.get(key)
-            if dl is not None:
+            # a finished-with-error download lingering before its finally-pop
+            # must not be joined — the error would surface to the new client
+            if dl is not None and dl.error is None:
                 return dl
             _, _, part_p = self._paths(key)
             part_p.parent.mkdir(parents=True, exist_ok=True)
@@ -489,34 +631,57 @@ class DiskCache:
                 if meta is None:
                     raise RuntimeError("filler must yield metadata first")
                 meta.key = key
-                with open(part_p, "wb") as f:
+                # an upstream error (transient 401/5xx/404) is streamed to the
+                # waiting clients from MEMORY and NEVER committed to the cache —
+                # a bad answer must not poison the key until eviction
+                commit = meta.status == 200
+                if commit:
+                    with open(part_p, "wb") as f:
+                        if first:
+                            f.write(first)
+                            dl.size = len(first)
+                            if h:
+                                h.update(first)
+                        dl.meta = meta
+                        dl.notify()
+                        async for _, chunk in gen:
+                            if not chunk:
+                                continue
+                            f.write(chunk)
+                            dl.size += len(chunk)
+                            if h:
+                                h.update(chunk)
+                            dl.notify()
+                    if h is not None and h.hexdigest() != verify:
+                        self.verify_failures += 1
+                        raise IntegrityError(
+                            f"sha256 mismatch for {key}: "
+                            f"got {h.hexdigest()[:16]} want {verify[:16]}")
+                    meta.size = dl.size
+                    meta.total = dl.size
+                    os.replace(part_p, data_p)
+                    meta_p.write_text(json.dumps(meta.__dict__))
+                    self._record(key, dl.size)
+                else:
+                    dl.mem = bytearray()
+                    cap = 256 * 1024          # error bodies are small; bound it
                     if first:
-                        f.write(first)
-                        dl.size = len(first)
-                        if h:
-                            h.update(first)
+                        dl.mem += first[:cap]
+                        dl.size = len(dl.mem)
                     dl.meta = meta
                     dl.notify()
                     async for _, chunk in gen:
                         if not chunk:
                             continue
-                        f.write(chunk)
-                        dl.size += len(chunk)
-                        if h:
-                            h.update(chunk)
-                        dl.notify()
-                if h is not None and h.hexdigest() != verify:
-                    self.verify_failures += 1
-                    raise IntegrityError(
-                        f"sha256 mismatch for {key}: got {h.hexdigest()[:16]} want {verify[:16]}")
-                meta.size = dl.size
-                meta.total = dl.size
-                os.replace(part_p, data_p)
-                meta_p.write_text(json.dumps(meta.__dict__))
-                self._record(key, dl.size)
+                        if len(dl.mem) < cap:
+                            dl.mem += chunk[:cap - len(dl.mem)]
+                            dl.size = len(dl.mem)
+                            dl.notify()
                 dl.done = True
                 dl.notify()
-                await self._enforce_limit()
+                if commit:
+                    await self._enforce_quota(key)
+                    await self._enforce_limit()
         except BaseException as e:  # noqa: BLE001
             dl.error = e
             dl.done = True
@@ -527,18 +692,58 @@ class DiskCache:
                 pass
         finally:
             async with self._lock:
-                self._inflight.pop(key, None)
+                if self._inflight.get(key) is dl:   # identity: don't pop a successor
+                    self._inflight.pop(key, None)
 
     async def _read_inflight(self, key: str, dl: _Download,
                              start: int, end: Optional[int]) -> AsyncIterator[bytes]:
         data_p, _, part_p = self._paths(key)
-        path = part_p if part_p.exists() else data_p
-        f = open(path, "rb")
+        f = None
+        path = None
+
+        def try_open() -> bool:
+            nonlocal f, path
+            for cand in (part_p, data_p):
+                try:
+                    f = open(cand, "rb")
+                    path = cand
+                    return True
+                except FileNotFoundError:
+                    continue
+            return False
+
+        try_open()
         pos = start
         try:
             while True:
                 if end is not None and pos > end:
                     break
+                if dl.mem is not None:
+                    # non-200 body: served from the fill's memory buffer
+                    m = dl.mem
+                    if pos < len(m):
+                        upto = len(m) if end is None else min(len(m), end + 1)
+                        chunk = bytes(m[pos:upto])
+                        pos += len(chunk)
+                        self.bytes_served += len(chunk)
+                        yield chunk
+                        continue
+                    if dl.error is not None:
+                        raise dl.error
+                    if dl.done:
+                        break
+                    await dl.wait()
+                    continue
+                if f is None:
+                    if dl.error is not None:
+                        raise dl.error
+                    if dl.done:
+                        if try_open():
+                            continue
+                        break
+                    await dl.wait()
+                    try_open()
+                    continue
                 avail = dl.size
                 if pos < avail:
                     f.seek(pos)
@@ -552,7 +757,7 @@ class DiskCache:
                 if dl.error is not None:
                     raise dl.error
                 if dl.done:
-                    if not part_p.exists() and data_p.exists() and path != data_p:
+                    if path != data_p and not part_p.exists() and data_p.exists():
                         f.close()
                         f = open(data_p, "rb")
                         path = data_p
@@ -568,20 +773,33 @@ class DiskCache:
                     break
                 await dl.wait()
         finally:
-            f.close()
+            if f is not None:
+                f.close()
 
-    async def _read_file(self, key: str, start: int, end: int) -> AsyncIterator[bytes]:
+    def _read_file(self, key: str, start: int, end: int):
+        """Open eagerly (so an eviction between lookup and read degrades to a
+        miss instead of a 500) and return an async iterator, or None if gone."""
         data_p, _, _ = self._paths(key)
-        with open(data_p, "rb") as f:
-            f.seek(start)
-            remaining = end - start + 1
-            while remaining > 0:
-                chunk = f.read(min(CHUNK, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                self.bytes_served += len(chunk)
-                yield chunk
+        try:
+            f = open(data_p, "rb")
+        except FileNotFoundError:
+            return None
+
+        async def it() -> AsyncIterator[bytes]:
+            try:
+                f.seek(start)
+                remaining = end - start + 1
+                while remaining > 0:
+                    chunk = f.read(min(CHUNK, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    self.bytes_served += len(chunk)
+                    yield chunk
+            finally:
+                f.close()
+
+        return it()
 
     def _evict(self, digest: str, e: dict):
         sub = self.root / digest[:2] / digest[2:4]
@@ -591,29 +809,59 @@ class DiskCache:
         except Exception:
             pass
         self._total -= e["size"]
+        self._grp_sub(e.get("key", ""), e["size"])
         self._index.pop(digest, None)
+        self._mark_dirty()
+
+    async def _enforce_quota(self, key: str):
+        """Per-service quota: evict the flooding service's own LRU entries so it
+        can't push everyone else out of the shared pool."""
+        group = self._group_label(key)
+        q = self.quotas.get(group)
+        if not q:
+            return
+        g = self._groups.get(group)
+        if not g or g[1] <= q:
+            return
+        target = int(q * 0.95)
+        n = 0
+        for digest in list(self._index.keys()):     # dict order == LRU order
+            if self._groups.get(group, [0, 0])[1] <= target:
+                break
+            e = self._index.get(digest)
+            if e is None:
+                continue
+            k = e.get("key", "")
+            if self._group_label(k) != group or self._is_pinned(k):
+                continue
+            self._evict(digest, e)
+            n += 1
+            if n % 500 == 0:
+                await asyncio.sleep(0)               # don't starve the loop
 
     async def _enforce_limit(self):
-        """LRU eviction down to the low-water mark, with two refinements:
-        pinned entries are never evicted, and entries touched within the protect
-        window are evicted only as a last resort (so a burst of small files
-        cannot push out a hot large layer)."""
+        """LRU eviction down to the low-water mark. The index dict is kept in
+        LRU order, so this walks from the front — no 80k-entry sort. Pinned
+        entries are never evicted; entries touched within the protect window go
+        only as a last resort."""
         if self._total <= self.max_bytes:
             return
         now = time.time()
-        ordered = sorted(self._index.items(), key=lambda kv: kv[1]["atime"])
-        # pass 1: evict cold (older than protect window); pass 2: allow recent too
+        n = 0
         for allow_recent in (False, True):
-            for digest, e in ordered:
+            if self._total <= self.low_water:
+                break
+            for digest in list(self._index.keys()):
                 if self._total <= self.low_water:
                     break
-                if digest not in self._index:
+                e = self._index.get(digest)
+                if e is None:
                     continue
                 if self._is_pinned(e.get("key", "")):
                     continue
                 if not allow_recent and (now - e["atime"]) < self.protect_window:
                     continue
                 self._evict(digest, e)
-            if self._total <= self.low_water:
-                break
-        self._flush(force=True)
+                n += 1
+                if n % 500 == 0:
+                    await asyncio.sleep(0)           # don't starve the loop

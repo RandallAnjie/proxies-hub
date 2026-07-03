@@ -89,27 +89,41 @@ class GitHubProxy:
         return await send(request, meta, chunks)
 
     async def _release(self, request, owner, repo, tag, asset, auth):
-        """Resolve a private/public release asset via the API and stream it."""
+        """Resolve a private/public release asset via the API and stream it.
+
+        The API lookup runs fresh on EVERY request with the client's own auth —
+        that is the authorization check. The asset body, however, is cached
+        under ``id:updated_at`` (which changes whenever the asset is
+        re-uploaded), so a 250 MB artifact fetched by a fleet of machines hits
+        the disk instead of GitHub each time — and can never be served stale."""
         asset = unquote(asset)
         base = {"User-Agent": "proxyhub-gh"}
         if auth:
             base["Authorization"] = auth
+        accept_json = {**base, "Accept": "application/vnd.github+json"}
 
         st, rel = await fetch_json(
-            f"{API}/repos/{owner}/{repo}/releases/tags/{tag}",
-            {**base, "Accept": "application/vnd.github+json"})
+            f"{API}/repos/{owner}/{repo}/releases/tags/{tag}", accept_json)
+        if (st != 200 or not isinstance(rel, dict)) and tag == "latest":
+            # no literal "latest" tag — fall back to the semantic latest release
+            st, rel = await fetch_json(
+                f"{API}/repos/{owner}/{repo}/releases/latest", accept_json)
         if st != 200 or not isinstance(rel, dict):
             return web.Response(status=st if st and st >= 400 else 502,
                                 text=f"release lookup failed ({st})\n")
-        aid = next((a["id"] for a in rel.get("assets", []) if a["name"] == asset), None)
-        if aid is None:
+        a = next((a for a in rel.get("assets", []) if a["name"] == asset), None)
+        if a is None:
             return web.Response(status=404, text=f"asset not found: {asset}\n")
 
         # the asset endpoint 302s to a signed URL; the filler follows it and
         # drops Authorization on the cross-host hop.
-        url = f"{API}/repos/{owner}/{repo}/releases/assets/{aid}"
+        url = f"{API}/repos/{owner}/{repo}/releases/assets/{a['id']}"
         headers = {**base, "Accept": "application/octet-stream"}
+        key = f"gh:asset:{a['id']}:{a.get('updated_at', '')}"
         filler = upstream_filler(request.method, url, headers)
-        meta, chunks = await self.cache.stream("", filler, cacheable=False)
+        if request.method == "HEAD":
+            meta, chunks = await self.cache.stream("", filler, cacheable=False)
+        else:
+            meta, chunks = await self.cache.stream(key, filler, cacheable=True)
         meta.extra_headers["Content-Disposition"] = f'attachment; filename="{asset}"'
         return await send(request, meta, chunks)

@@ -81,6 +81,7 @@ class Config:
     cache_low_water: float = 0.92        # evict down to this fraction of max
     cache_pin: list = field(default_factory=list)   # regexes never evicted
     cache_max_fills: int = 8             # max concurrent upstream fills (bandwidth)
+    cache_quotas: dict = field(default_factory=dict)  # per-service byte caps
     # host suffix the proxy serves under, used to route by Host header
     domain: str = "proxies.live"
     docker: dict[str, DockerRegistry] = field(default_factory=dict)
@@ -109,6 +110,7 @@ class Config:
         c.cache_pin = list(cache.get("pin", []))
         c.cache_max_fills = int(_envstr("PROXYHUB_MAX_FILLS",
                                         cache.get("max_concurrent_fills", c.cache_max_fills)))
+        c.cache_quotas = {k: _bytes(v) for k, v in (cache.get("quotas") or {}).items()}
         for name, d in (raw.get("docker") or {}).items():
             c.docker[name] = DockerRegistry(
                 name=name, upstream=d["upstream"],

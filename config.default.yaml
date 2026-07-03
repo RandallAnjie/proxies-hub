@@ -12,6 +12,9 @@ cache:
   protect_window: 600
   low_water: 0.92
   pin: []
+  # quotas:               # optional per-service byte caps (labels as shown in
+  #   torch: 100g         # /status cache_breakdown) so one flooding service
+  #   apk: 20g            # can't evict everyone else's hot objects
 
 docker:
   hub:     { upstream: https://registry-1.docker.io }

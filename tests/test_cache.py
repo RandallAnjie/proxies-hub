@@ -206,6 +206,117 @@ def test_queued_fill_aborts_when_no_waiters():
     asyncio.run(go())
 
 
+def test_non_200_never_cached():
+    """A transient upstream error must be streamed through but NEVER committed
+    — otherwise a 401/500 poisons the key until eviction."""
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9)
+            meta, it = await c.stream("k", _filler_meta(b"denied", status=401))
+            assert meta.status == 401
+            assert await _collect(it) == b"denied"      # body reaches the client
+            for _ in range(50):
+                await asyncio.sleep(0.005)
+                if not c._inflight:
+                    break
+            assert c.lookup("k") is None                # ...but is not cached
+            # and the next request gets fresh (good) data, cached normally
+            meta2, it2 = await c.stream("k", _filler_meta(b"good"))
+            assert meta2.status == 200
+            assert await _collect(it2) == b"good"
+            assert c.lookup("k") is not None
+    asyncio.run(go())
+
+
+def test_lookup_purges_legacy_poisoned_entry():
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9)
+            # forge a legacy entry cached with a non-200 status
+            data_p, meta_p, _ = c._paths("bad")
+            data_p.parent.mkdir(parents=True, exist_ok=True)
+            data_p.write_bytes(b"error body")
+            meta_p.write_text('{"key": "bad", "size": 10, "content_type": "x", '
+                              '"status": 502, "total": 10, "extra_headers": {}}')
+            c._record("bad", 10)
+            assert c.lookup("bad") is None              # purged, not served
+            assert not data_p.exists()
+    asyncio.run(go())
+
+
+def test_revalidate_5xx_serves_stale():
+    """stale-if-error: a flaky upstream must not take down an index we hold."""
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9)
+            good = b'{"pkg": 1}' * 50
+            await _collect((await c.stream("idx", _filler_meta(good, headers={"ETag": '"a"'})))[1])
+            cached = c.peek("idx")
+            meta, it = await c.stream_revalidate("idx", _filler_meta(b"boom", status=503), cached)
+            assert meta.status == 200                   # the cached copy
+            assert await _collect(it) == good
+            # a 404 passes through but leaves the cache untouched
+            meta2, it2 = await c.stream_revalidate("idx", _filler_meta(b"gone", status=404), cached)
+            assert meta2.status == 404
+            assert await _collect(it2) == b"gone"
+            assert c.peek("idx") is not None            # still cached
+            _, it3 = await c.stream("idx", _filler_meta(b"NOPE"))
+            assert await _collect(it3) == good
+    asyncio.run(go())
+
+
+def test_per_service_quota():
+    """One flooding service is evicted down to its own quota; others survive."""
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9, protect_window=0,
+                          quotas={"apk": 3000})
+            # another service's entry, older than everything apk writes
+            await _collect((await c.stream("web:torch:/w.whl", _filler(b"T" * 2000)))[1])
+            for i in range(8):                          # apk floods 8x1000B
+                await _collect((await c.stream(f"web:apk:/f{i}", _filler(b"A" * 1000)))[1])
+            bd = c.breakdown()
+            assert bd["apk"]["bytes"] <= 3000           # clamped to quota
+            assert c.lookup("web:torch:/w.whl") is not None   # bystander intact
+            assert bd["torch"]["bytes"] == 2000
+    asyncio.run(go())
+
+
+def test_index_dict_order_is_lru():
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9)
+            for k in ("a", "b", "c"):
+                await _collect((await c.stream(k, _filler(b"x" * 10)))[1])
+            c.lookup("a")                               # bump 'a' to the back
+            order = [e["key"] for e in c._index.values()]
+            assert order == ["b", "c", "a"]
+    asyncio.run(go())
+
+
+def test_reconcile_adopts_and_drops():
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9)
+            await _collect((await c.stream("keep", _filler(b"K" * 100)))[1])
+            c.flush_sync()
+            # an untracked file appears (index write lost in a crash)...
+            data_p, meta_p, _ = c._paths("orphan")
+            data_p.parent.mkdir(parents=True, exist_ok=True)
+            data_p.write_bytes(b"O" * 50)
+            meta_p.write_text('{"key": "orphan", "size": 50, "content_type": "x", '
+                              '"status": 200, "total": 50, "extra_headers": {}}')
+            # ...and a tracked file vanishes
+            kp, km, _ = c._paths("keep")
+            kp.unlink()
+            km.unlink()
+            c2 = DiskCache(d, max_bytes=10**9)          # reopen -> reconcile
+            assert c2.lookup("orphan") is not None      # adopted (evictable now)
+            assert c2.lookup("keep") is None
+            assert c2.stats()["cache_files"] == 1
+    asyncio.run(go())
+
+
 def test_docker_blob_grouped_as_shared_layers():
     with tempfile.TemporaryDirectory() as d:
         c = DiskCache(d, max_bytes=10**9)
@@ -248,7 +359,9 @@ def test_sweep_partials_age_and_active():
             part_path = active
         c._inflight["k"] = _DL()
 
-        removed = c.sweep_partials(min_age=600)
+        # the caller snapshots in-flight paths on the event loop and passes
+        # them in — the sweep itself runs in an executor thread
+        removed = c.sweep_partials(min_age=600, active=c.active_partials())
         assert not old.exists()            # untouched > window -> reaped
         assert fresh.exists()              # too new -> kept
         assert active.exists()             # backing an in-flight fill -> kept

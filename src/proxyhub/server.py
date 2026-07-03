@@ -11,7 +11,9 @@ Endpoints: /healthz, /status (json metrics).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import time
 from collections import Counter, deque
 from pathlib import Path
@@ -163,6 +165,8 @@ class HourlyHitRate:
         if self._hour is None:
             self._hour, self._start = h, (hits, misses)
             return
+        if h - self._hour > self._points.maxlen:     # long sleep / clock jump:
+            self._hour = h - self._points.maxlen     # don't spin one loop per hour
         while h > self._hour:                        # close out each elapsed hour
             self._points.append({
                 "hour": self._hour,
@@ -171,6 +175,11 @@ class HourlyHitRate:
             })
             self._hour += 1
             self._start = (hits, misses)
+
+    def restore(self, points: list):
+        for p in points:
+            if isinstance(p, dict) and not p.get("current"):
+                self._points.append(p)
 
     def series(self, now: float) -> list:
         self.tick(now)
@@ -247,12 +256,46 @@ def build_app(cfg: Config) -> web.Application:
                       protect_window=cfg.cache_protect_window,
                       low_water_ratio=cfg.cache_low_water,
                       pin_patterns=cfg.cache_pin,
-                      max_concurrent_fills=cfg.cache_max_fills)
+                      max_concurrent_fills=cfg.cache_max_fills,
+                      quotas=cfg.cache_quotas)
     routes: dict[str, object] = {}
     reqs: Counter = Counter()
     started = time.time()
     hourly = HourlyHitRate(cache, hours=24)   # per-hour hit-rate for the chart
     rolling = RollingHitRate(cache, window=600)   # trailing 10-min hit rate
+
+    # counters survive restarts (we redeploy often; a reset dashboard lies)
+    state_path = Path(cfg.cache_dir) / ".stats.json"
+    try:
+        st = json.loads(state_path.read_text())
+        cache.hits = int(st.get("hits", 0))
+        cache.misses = int(st.get("misses", 0))
+        cache.bytes_served = int(st.get("bytes_served", 0))
+        cache.verify_failures = int(st.get("verify_failures", 0))
+        cache.revalidations = int(st.get("revalidations", 0))
+        cache.aborted_fills = int(st.get("aborted_fills", 0))
+        cache._svc.update({k: list(v) for k, v in st.get("svc", {}).items()})
+        reqs.update(st.get("requests_by_host", {}))
+        hourly.restore(st.get("hourly", []))
+    except Exception:
+        pass
+
+    def save_state():
+        try:
+            tmp = state_path.with_suffix(".stats.tmp")
+            tmp.write_text(json.dumps({
+                "hits": cache.hits, "misses": cache.misses,
+                "bytes_served": cache.bytes_served,
+                "verify_failures": cache.verify_failures,
+                "revalidations": cache.revalidations,
+                "aborted_fills": cache.aborted_fills,
+                "svc": cache._svc,
+                "requests_by_host": dict(reqs),
+                "hourly": list(hourly._points),
+            }))
+            os.replace(tmp, state_path)
+        except Exception:
+            pass
 
     for name, reg in cfg.docker.items():
         routes[f"{name}.docker.{cfg.domain}"] = DockerProxy(reg, cache)
@@ -333,9 +376,14 @@ def build_app(cfg: Config) -> web.Application:
             now = time.time()
             hourly.tick(now)
             rolling.sample(now)
+            await cache.flush_async()      # throttled index persistence
+            await loop.run_in_executor(None, save_state)
             n += 1
-            if n % 10 == 0:      # every ~10 min: reap abandoned partials
-                await loop.run_in_executor(None, cache.sweep_partials)
+            if n % 10 == 0:      # every ~10 min: reap abandoned partials.
+                # snapshot in-flight paths ON THE LOOP — the sweep runs in an
+                # executor thread and must not iterate loop-owned dicts
+                active = cache.active_partials()
+                await loop.run_in_executor(None, cache.sweep_partials, 600, active)
 
     async def _start_bg(app):
         app["_ticker"] = asyncio.create_task(_ticker())
@@ -344,6 +392,8 @@ def build_app(cfg: Config) -> web.Application:
         t = app.get("_ticker")
         if t:
             t.cancel()
+        cache.flush_sync()     # persist the LRU index on clean shutdown
+        save_state()
 
     app = web.Application(client_max_size=0)
     app.router.add_route("*", "/{tail:.*}", dispatch)
