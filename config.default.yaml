@@ -15,6 +15,12 @@ cache:
   # quotas:               # optional per-service byte caps (labels as shown in
   #   torch: 100g         # /status cache_breakdown) so one flooding service
   #   apk: 20g            # can't evict everyone else's hot objects
+  fill_pools:             # upstream-fetch slots per service class: heavy
+    docker: 4             # services queue among themselves and can't starve
+    gh: 2                 # others (multi-GB torch/hf fetches once pinned every
+    torch: 2              # slot while docker layers / github assets timed out)
+    hf: 2
+    default: 4
 
 docker:
   hub:     { upstream: https://registry-1.docker.io }
