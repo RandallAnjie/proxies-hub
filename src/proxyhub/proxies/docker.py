@@ -27,6 +27,11 @@ from .base import parse_range, ranged_upstream_filler, send, upstream_filler
 
 _BLOB = re.compile(r"^/v2/(.+)/blobs/(sha256:[0-9a-f]{64})$")
 _MANIFEST = re.compile(r"^/v2/(.+)/manifests/(.+)$")
+# any other repo-scoped endpoint (referrers, tags/list, ...) — the repo must be
+# extracted so the upstream token carries the RIGHT scope; a stale scope from
+# the cached challenge gets 401 insufficient_scope, and containerd then chases
+# auth.docker.io itself with the mirror's basic-auth -> 400, pull fails
+_REPO_ANY = re.compile(r"^/v2/(.+?)/(?:referrers|tags|_catalog)(?:/|$)")
 _BEARER = re.compile(r'(\w+)="([^"]*)"')
 
 
@@ -223,8 +228,11 @@ class DockerProxy:
             return await self._handle_manifest(request, url, path, method, accept,
                                                m_man.group(1), m_man.group(2))
 
-        # anything else: authenticated passthrough
-        headers = await self._authorized_headers(url, accept)
+        # anything else (referrers, tags/list, ...): authenticated passthrough
+        # with the repo-scoped token
+        m_any = _REPO_ANY.match(path)
+        headers = await self._authorized_headers(
+            url, accept, m_any.group(1) if m_any else None)
         if "Range" in request.headers:
             headers["Range"] = request.headers["Range"]
         filler = upstream_filler(method, url, headers)

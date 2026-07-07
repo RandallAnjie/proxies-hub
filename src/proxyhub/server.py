@@ -257,7 +257,8 @@ def build_app(cfg: Config) -> web.Application:
                       low_water_ratio=cfg.cache_low_water,
                       pin_patterns=cfg.cache_pin,
                       max_concurrent_fills=cfg.cache_max_fills,
-                      quotas=cfg.cache_quotas)
+                      quotas=cfg.cache_quotas,
+                      fill_pools=cfg.cache_fill_pools)
     routes: dict[str, object] = {}
     reqs: Counter = Counter()
     started = time.time()

@@ -82,7 +82,8 @@ class _Download:
 class DiskCache:
     def __init__(self, root: str, max_bytes: int, protect_window: int = 600,
                  low_water_ratio: float = 0.92, pin_patterns: Optional[list] = None,
-                 max_concurrent_fills: int = 8, quotas: Optional[dict] = None):
+                 max_concurrent_fills: int = 8, quotas: Optional[dict] = None,
+                 fill_pools: Optional[dict] = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.max_bytes = max_bytes
@@ -102,8 +103,20 @@ class DiskCache:
         self._inflight: dict[str, _Download] = {}
         self._lock = asyncio.Lock()
         # cap concurrent upstream fetches so N big layers don't split the link
-        # into a useless trickle (each queued fill waits for a free slot)
-        self._fill_sem = asyncio.Semaphore(max_concurrent_fills)
+        # into a useless trickle. Fills are POOLED per service class: one global
+        # FIFO semaphore let multi-GB torch/HF fetches occupy every slot for
+        # tens of minutes while a docker pull's small layers starved in the
+        # queue behind them (-> client timeouts). docker gets its own pool; a
+        # service named in fill_pools gets a dedicated one; the rest share
+        # "default". A flood in one pool cannot stall another.
+        if not fill_pools:
+            half = max(2, max_concurrent_fills // 2)
+            fill_pools = {"docker": half,
+                          "default": max(2, max_concurrent_fills - half)}
+        fill_pools.setdefault("docker", 4)
+        fill_pools.setdefault("default", 4)
+        self.fill_pools = {k: int(v) for k, v in fill_pools.items()}
+        self._fill_sems = {k: asyncio.Semaphore(v) for k, v in self.fill_pools.items()}
         self.max_fills = max_concurrent_fills
         # metrics
         self.hits = 0
@@ -125,6 +138,14 @@ class DiskCache:
         self._rv_seq = itertools.count()
         self._load_index()
         self._reconcile()
+
+    def _pool_for(self, key: str) -> str:
+        group = self._group_label(key)
+        if group in self._fill_sems:
+            return group                       # explicitly pooled service
+        if group.startswith("docker"):
+            return "docker"
+        return "default"
 
     # ---- startup reconcile ----
     def _reconcile(self):
@@ -372,6 +393,7 @@ class DiskCache:
             "revalidations": self.revalidations,
             "aborted_fills": self.aborted_fills,
             "inflight_fills": len(self._inflight),
+            "fill_pools": self.fill_pools,
             "pins": len(self._pins),
             "quotas": self.quotas,
         }
@@ -616,9 +638,11 @@ class DiskCache:
         # bytes can be checked against the expected digest before we commit.
         h = hashlib.sha256() if verify else None
         try:
-            # gate the actual upstream fetch: queued fills wait here for a slot,
-            # so a burst of layers doesn't split the link into a dead trickle
-            async with self._fill_sem:
+            # gate the actual upstream fetch: queued fills wait here for a slot
+            # in their service pool, so a burst of layers doesn't split the link
+            # into a dead trickle — and giant torch/HF fetches can't starve
+            # docker's small layers (separate pools)
+            async with self._fill_sems[self._pool_for(key)]:
                 # nobody is waiting anymore (every client disconnected while we
                 # were queued) -> abort before downloading a single byte. A fill
                 # that already STARTED keeps going (cache investment, capped by

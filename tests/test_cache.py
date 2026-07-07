@@ -152,12 +152,44 @@ def test_fill_concurrency_capped():
     asyncio.run(go())
 
 
+def test_docker_pool_not_starved_by_default_pool():
+    """Regression: giant torch/HF fills used to occupy every slot of one global
+    semaphore, starving docker's small layers -> client timeouts."""
+    async def go():
+        with tempfile.TemporaryDirectory() as d:
+            c = DiskCache(d, max_bytes=10**9,
+                          fill_pools={"docker": 1, "default": 1})
+            release = asyncio.Event()
+
+            def huge():                       # a giant fetch pinning "default"
+                async def g():
+                    yield CacheMeta(key="", size=-1, content_type="x"), b""
+                    await release.wait()
+                    yield None, b"W"
+                return g
+
+            # saturate the default pool (torch wheel that takes forever)
+            t = asyncio.create_task(c.stream("web:torch:/big.whl", huge()))
+            await asyncio.sleep(0.05)
+            # a docker layer arrives — must complete WITHOUT waiting for torch
+            meta, it = await asyncio.wait_for(
+                c.stream("docker:blob:sha256:" + "b" * 64, _filler(b"L" * 100)),
+                timeout=2.0)
+            assert await _collect(it) == b"L" * 100
+            release.set()
+            _, it2 = await t
+            assert await _collect(it2) == b"W"
+
+    asyncio.run(go())
+
+
 def test_queued_fill_aborts_when_no_waiters():
     """A fill still queued for a slot gives up if every waiting client is gone —
     the root of .part pile-up: downloads nobody asked for."""
     async def go():
         with tempfile.TemporaryDirectory() as d:
-            c = DiskCache(d, max_bytes=10**9, max_concurrent_fills=1)
+            c = DiskCache(d, max_bytes=10**9,
+                          fill_pools={"default": 1, "docker": 1})
             release = asyncio.Event()
             called = {"b": False}
 

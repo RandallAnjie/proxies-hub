@@ -13,11 +13,14 @@ from ..upstream import session
 
 CHUNK = 256 * 1024
 
-# headers we never copy back to the client
+# headers we never copy back to the client. www-authenticate is stripped on
+# purpose: clients authenticate to THIS proxy (reverse-proxy basic auth), never
+# to our upstreams — forwarding an upstream Bearer challenge makes containerd
+# chase the upstream's auth realm itself, sending it the MIRROR's credentials.
 _HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
     "te", "trailers", "transfer-encoding", "upgrade", "content-length",
-    "content-encoding", "set-cookie",
+    "content-encoding", "set-cookie", "www-authenticate",
 }
 _REDIRECT = {301, 302, 303, 307, 308}
 
