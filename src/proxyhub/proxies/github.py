@@ -86,6 +86,12 @@ class GitHubProxy:
         headers = self._fwd_headers(request, auth)
         filler = upstream_filler(request.method, target, headers, body=body)
         meta, chunks = await self.cache.stream("", filler, cacheable=False)
+        if meta.status == 401:
+            # upstream WWW-Authenticate is stripped globally (see base._HOP);
+            # git/libcurl won't retry a 401 with credentials unless a challenge
+            # names the scheme — issue OUR OWN Basic challenge so private
+            # clone/push prompts (or URL-embedded credentials) work
+            meta.extra_headers["WWW-Authenticate"] = 'Basic realm="proxyhub-github"'
         return await send(request, meta, chunks)
 
     async def _release(self, request, owner, repo, tag, asset, auth):
