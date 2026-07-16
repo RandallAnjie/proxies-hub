@@ -13,6 +13,7 @@ clone) is forwarded unchanged.
 """
 from __future__ import annotations
 
+import base64
 import re
 from urllib.parse import unquote, urlencode
 
@@ -41,14 +42,35 @@ class GitHubProxy:
         self.cfg = cfg
         self.cache = cache
 
-    def _auth(self, request: web.Request) -> str | None:
+    def _auth(self, request: web.Request) -> tuple[str | None, bool]:
+        """Resolve the request's auth -> (Authorization value, came_from_alias).
+
+        An alias works in three places: ``?token=<alias>``, or as the username/
+        password of HTTP Basic auth — so ``git clone https://x:<alias>@…`` works
+        without anyone holding the real PAT. Alias-derived auth is READ-ONLY
+        (enforced in handle()): a shared word must not carry push rights."""
         tok = request.query.get("token")
         if tok:
-            real = self.cfg.token_aliases.get(tok, tok)
-            return f"token {real}"
-        if "Authorization" in request.headers:   # forwarded (e.g. private clone)
-            return request.headers["Authorization"]
-        return None
+            real = self.cfg.token_aliases.get(tok)
+            return self._basic(real or tok), real is not None
+        hdr = request.headers.get("Authorization")
+        if not hdr:
+            return None, False
+        if hdr.lower().startswith("basic "):
+            try:
+                user, _, pwd = base64.b64decode(hdr[6:]).decode().partition(":")
+            except Exception:
+                return hdr, False
+            real = self.cfg.token_aliases.get(pwd) or self.cfg.token_aliases.get(user)
+            if real:
+                return self._basic(real), True
+        return hdr, False
+
+    @staticmethod
+    def _basic(pat: str) -> str:
+        # Basic works on BOTH github.com's git smart-http endpoints (which do
+        # NOT accept the 'token' scheme) and api.github.com
+        return "Basic " + base64.b64encode(f"x-access-token:{pat}".encode()).decode()
 
     def _fwd_headers(self, request: web.Request, auth: str | None) -> dict:
         h = {k: request.headers[k] for k in request.headers if k.lower() in _FWD}
@@ -68,7 +90,16 @@ class GitHubProxy:
         if host not in ALLOWED_HOSTS:
             return web.Response(status=403, text=f"host not allowed: {host}\n")
 
-        auth = self._auth(request)
+        auth, from_alias = self._auth(request)
+
+        # token aliases are for DISTRIBUTION (clone/pull/downloads). Anyone who
+        # knows the shared word must not be able to write: block push (both the
+        # receive-pack advertisement and the upload itself) unless a real PAT.
+        if from_alias and (rest.endswith("/git-receive-pack")
+                           or request.query.get("service") == "git-receive-pack"):
+            return web.Response(
+                status=403,
+                text="token aliases are read-only; push with a real PAT\n")
 
         rel = _RELDL.match(rest)
         if rel and request.method in ("GET", "HEAD"):
