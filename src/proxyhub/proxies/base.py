@@ -56,7 +56,12 @@ def upstream_filler(method: str, url: str, headers: dict,
             try:
                 keep = {k: v for k, v in resp.headers.items() if k.lower() not in _HOP}
                 try:
-                    total = int(resp.headers.get("Content-Length", "-1"))
+                    # a Content-Encoding'd body inflates on the way through
+                    # (auto_decompress) — its upstream length is meaningless
+                    if resp.headers.get("Content-Encoding"):
+                        total = -1
+                    else:
+                        total = int(resp.headers.get("Content-Length", "-1"))
                 except ValueError:
                     total = -1
                 meta = CacheMeta(
@@ -126,7 +131,14 @@ def ranged_upstream_filler(url: str, headers: dict, chunk: int = 128 * 1024 * 10
                     cr = resp.headers.get("Content-Range", "")
                     total = int(cr.rsplit("/", 1)[1]) if "/" in cr else -1
                 else:
-                    total = -1   # upstream ignored Range -> single response
+                    # upstream ignored Range -> single full response. Its
+                    # Content-Length is still authoritative: without it the
+                    # blob reply goes out chunked and docker/containerd fail
+                    # with 'missing or empty Content-Length header'
+                    try:
+                        total = int(resp.headers.get("Content-Length", "-1"))
+                    except ValueError:
+                        total = -1
                 keep = {k: v for k, v in resp.headers.items()
                         if k.lower() not in _HOP and k.lower() != "content-range"}
                 yield CacheMeta(
@@ -183,6 +195,15 @@ def _apply(resp: web.StreamResponse, meta: CacheMeta):
     if meta.size is not None and meta.size >= 0:
         resp.headers["Content-Length"] = str(meta.size)
     resp.headers["X-Proxyhub"] = "1"
+
+
+def full_accept(request: web.Request, default: str = "*/*") -> str:
+    """ALL Accept values, joined. Docker <=26's distribution client sends five
+    SEPARATE ``Accept:`` header lines; ``headers.get`` returns only the first,
+    which silently dropped the OCI-index types — ghcr then answered the tag GET
+    with 404 'OCI index found, but Accept header does not support OCI indexes'."""
+    vals = request.headers.getall("Accept", [])
+    return ",".join(vals) if vals else default
 
 
 def parse_range(request: web.Request):

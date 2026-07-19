@@ -23,7 +23,7 @@ from aiohttp import web
 from ..cache import DiskCache
 from ..config import DockerRegistry
 from ..upstream import session
-from .base import parse_range, ranged_upstream_filler, send, upstream_filler
+from .base import full_accept, parse_range, ranged_upstream_filler, send, upstream_filler
 
 _BLOB = re.compile(r"^/v2/(.+)/blobs/(sha256:[0-9a-f]{64})$")
 _MANIFEST = re.compile(r"^/v2/(.+)/manifests/(.+)$")
@@ -174,7 +174,7 @@ class DockerProxy:
                 "Docker-Distribution-Api-Version": "registry/2.0", "X-Proxyhub": "1"})
         url = self.reg.upstream.rstrip("/") + path
         method = request.method
-        accept = request.headers.get("Accept", "*/*")
+        accept = full_accept(request)
 
         m_blob = _BLOB.match(path)
         if m_blob:

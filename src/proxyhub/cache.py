@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
@@ -100,6 +101,11 @@ class DiskCache:
         self.verify_failures = 0
         self.revalidations = 0
         self.aborted_fills = 0    # queued fills dropped because no one waited
+        # live fill state for the dashboard: per-pool ACTIVE (slot held, bytes
+        # flowing) vs QUEUED (waiting for a slot) — 'inflight' alone made the
+        # dash look like it was jittering 0/1 with no explanation
+        self._pool_active: dict[str, int] = {}
+        self.last_failures: deque = deque(maxlen=10)
         self._inflight: dict[str, _Download] = {}
         self._lock = asyncio.Lock()
         # cap concurrent upstream fetches so N big layers don't split the link
@@ -393,6 +399,9 @@ class DiskCache:
             "revalidations": self.revalidations,
             "aborted_fills": self.aborted_fills,
             "inflight_fills": len(self._inflight),
+            "fills_active": {k: v for k, v in self._pool_active.items() if v},
+            "fills_queued": max(0, len(self._inflight) - sum(self._pool_active.values())),
+            "recent_failures": list(self.last_failures),
             "fill_pools": self.fill_pools,
             "pins": len(self._pins),
             "quotas": self.quotas,
@@ -603,6 +612,10 @@ class DiskCache:
         meta, first = await gen.__anext__()
         if meta is None:
             raise RuntimeError("filler must yield metadata first")
+        # surface the upstream length: docker 26's blob HEAD/GET reader fails
+        # outright on 'missing or empty Content-Length header'
+        if meta.size < 0 and meta.total is not None and meta.total >= 0:
+            meta.size = meta.total
 
         async def it():
             if first:
@@ -637,12 +650,14 @@ class DiskCache:
         # (regardless of any client Range), so a running sha256 over the written
         # bytes can be checked against the expected digest before we commit.
         h = hashlib.sha256() if verify else None
+        got_slot = False
+        pool = self._pool_for(key)
         try:
             # gate the actual upstream fetch: queued fills wait here for a slot
             # in their service pool, so a burst of layers doesn't split the link
             # into a dead trickle — and giant torch/HF fetches can't starve
             # docker's small layers (separate pools)
-            async with self._fill_sems[self._pool_for(key)]:
+            async with self._fill_sems[pool]:
                 # nobody is waiting anymore (every client disconnected while we
                 # were queued) -> abort before downloading a single byte. A fill
                 # that already STARTED keeps going (cache investment, capped by
@@ -650,6 +665,8 @@ class DiskCache:
                 if dl.waiters == 0:
                     self.aborted_fills += 1
                     raise _FillAborted(key)
+                self._pool_active[pool] = self._pool_active.get(pool, 0) + 1
+                got_slot = True
                 gen = filler()
                 meta, first = await gen.__anext__()
                 if meta is None:
@@ -710,11 +727,17 @@ class DiskCache:
             dl.error = e
             dl.done = True
             dl.notify()
+            if not isinstance(e, _FillAborted):
+                self.last_failures.append({
+                    "t": int(time.time()), "key": key[:120],
+                    "error": f"{type(e).__name__}: {e}"[:200]})
             try:
                 part_p.unlink(missing_ok=True)
             except Exception:
                 pass
         finally:
+            if got_slot:
+                self._pool_active[pool] -= 1
             async with self._lock:
                 if self._inflight.get(key) is dl:   # identity: don't pop a successor
                     self._inflight.pop(key, None)

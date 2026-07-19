@@ -138,6 +138,9 @@
     <p class="note" style="margin:0 0 12px">所有服务共用<strong>一个</strong>缓存池，按 key 前缀隔离（docker 各源、各包镜像各自独立计量），淘汰统一走 LRU + 保护窗口 + pin。下面是各服务实际占用：</p>
     <div class="bars" id="ph-break"></div>
 
+    <div class="subhead"><h3>最近回源失败</h3><span class="hint">最多10条 · 排除主动放弃</span></div>
+    <div id="ph-failures" style="margin-top:6px"></div>
+
     <div class="subhead"><h3>域名探测 · 端到端</h3><span class="hint" id="ph-probes-n">每 5 分钟</span></div>
     <div class="dots" id="ph-probes"></div>
 
@@ -326,8 +329,18 @@
       txt('ph-files',c.cache_files);
       txt('ph-vf',c.verify_failures);
       txt('ph-rv',c.revalidations);
-      txt('ph-inflight',c.inflight_fills);
+      var fa=c.fills_active||{}, fverb=Object.keys(fa).map(function(k){return k+' '+fa[k];}).join(' · ');
+      txt('ph-inflight',(Object.values(fa).reduce(function(a,b){return a+b;},0))+((c.fills_queued|0)?(' +排队'+c.fills_queued):'')); 
+      var infEl=document.getElementById('ph-inflight'); if(infEl) infEl.title=fverb||'无活跃回源';
       txt('ph-aborted',c.aborted_fills);
+      var fbox=document.getElementById('ph-failures');
+      if(fbox){
+        var rf=(c.recent_failures||[]).slice(-5).reverse();
+        fbox.innerHTML = rf.length ? rf.map(function(f){
+          var t=new Date(f.t*1000).toLocaleTimeString('zh-CN');
+          return '<div class="bl" style="font-family:var(--mono);font-size:11px;color:var(--dim);margin:3px 0"><span>'+t+' · '+f.key.replace(/^docker:blob:sha256:/,'blob ').slice(0,60)+'</span> <span style="color:var(--accent)">'+f.error.slice(0,80)+'</span></div>';
+        }).join('') : '<span class="hint">无</span>';
+      }
 
       var used=c.cache_bytes,maxb=c.cache_max,pct=Math.min(100,Math.round(used/maxb*100));
       txt('ph-cache-l',sz(used)+' / '+sz(maxb)+'  ('+pct+'%)');

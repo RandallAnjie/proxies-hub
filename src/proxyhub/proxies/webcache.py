@@ -36,7 +36,7 @@ class WebCacheProxy:
         url = self.upstream + path
         headers = {"User-Agent": "proxyhub-web", "Host": self.host}
         if "Accept" in request.headers:
-            headers["Accept"] = request.headers["Accept"]
+            headers["Accept"] = ",".join(request.headers.getall("Accept"))
         key = f"web:{self.mirror.name}:{path}"
 
         # indexes: cache WITH conditional revalidation (fresh, but a 304 avoids

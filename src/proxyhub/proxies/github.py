@@ -73,7 +73,8 @@ class GitHubProxy:
         return "Basic " + base64.b64encode(f"x-access-token:{pat}".encode()).decode()
 
     def _fwd_headers(self, request: web.Request, auth: str | None) -> dict:
-        h = {k: request.headers[k] for k in request.headers if k.lower() in _FWD}
+        h = {k: ",".join(request.headers.getall(k)) for k in request.headers
+             if k.lower() in _FWD}
         h.setdefault("User-Agent", "proxyhub-gh")
         if auth:
             h["Authorization"] = auth

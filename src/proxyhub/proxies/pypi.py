@@ -13,7 +13,7 @@ from aiohttp import web
 
 from ..cache import DiskCache
 from ..upstream import session
-from .base import proxy
+from .base import full_accept, proxy
 
 SIMPLE = "https://pypi.org/simple"
 FILES = "https://files.pythonhosted.org"
@@ -45,7 +45,7 @@ class PyPIProxy:
         if not sub.startswith("/"):
             sub = "/" + sub
         url = f"{SIMPLE}{sub}"
-        accept = request.headers.get("Accept", "text/html")
+        accept = full_accept(request, "text/html")
         hdrs = {"Accept": accept, "User-Agent": "proxyhub-pypi"}
         async with session().get(url, headers=hdrs) as r:
             status = r.status
