@@ -266,7 +266,9 @@ describe("rangedFetch honours the exact client window", () => {
     assert.equal(result.headers.get("Content-Length"), "4");
     assert.equal(result.headers.get("Content-Range"), "bytes 16-19/20");
     assert.equal(await bodyOf(result), "GHIJ");
-    assert.equal(calls[0].range, "bytes=16-19");
+    // Total is unknown until the first 206, so the window is start..start+chunk-1.
+    assert.equal(calls[0].range, "bytes=16-23");
+    assert.equal(calls.length, 1);
   });
 
   it("stitches a cross-chunk-boundary client range and stops at last", async () => {
