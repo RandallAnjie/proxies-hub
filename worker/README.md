@@ -63,6 +63,7 @@ npx wrangler@4 dev       # real workerd, if you have wrangler
 | `/npm` `/conda` `/torch` `/goproxy` `/hf` `/maven` `/gmaven` `/gradle` `/apk` | package mirrors |
 | `/apt/<host>/<path>` | apt/rpm/apk host-in-path |
 | `/cache/<scheme>/<host>/<path>` | generic cache |
+| `/` | HTML landing for browsers (`Accept: text/html`); plain-text help for curl/wget/empty-UA or non-HTML Accept |
 | `/docs` | Markdown for curl/wget/empty-UA; HTML for browsers |
 | anything else | 404 + help text |
 

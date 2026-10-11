@@ -246,6 +246,27 @@ describe("workerd integration (built worker.js)", { timeout: 180000 }, () => {
     return `${workerUrl}/cache/http/${host}${path}`;
   }
 
+  it("GET / is HTML for browsers and plain text for curl", async () => {
+    const html = await fetchExact(`${workerUrl}/`, {
+      headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0" },
+    });
+    assert.equal(html.resp.status, 200, headerDump(html));
+    assert.match(html.resp.headers.get("content-type") || "", /html/);
+    const page = new TextDecoder().decode(html.buf);
+    assert.match(page, /拉取式镜像代理/);
+    const host = new URL(workerUrl).host;
+    assert.ok(page.includes(`docker pull ${host}/hub/`), page.slice(0, 500));
+
+    const curl = await fetchExact(`${workerUrl}/`, {
+      headers: { "User-Agent": "curl/8.0.1" },
+    });
+    assert.equal(curl.resp.status, 200);
+    assert.match(curl.resp.headers.get("content-type") || "", /text\/plain/);
+    const text = new TextDecoder().decode(curl.buf);
+    assert.match(text, /all-in-one entrypoint/);
+    assert.doesNotMatch(text, /<!doctype html>/i);
+  });
+
   it("small/direct GET / HEAD / Range on index.yaml finish with exact bytes", async () => {
     const url = via("/index.yaml");
     const get = await fetchExact(url);

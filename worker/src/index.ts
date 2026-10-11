@@ -6,6 +6,7 @@ import { docsHtml, docsMarkdown, isMarkdownUa } from "./docs";
 import { handleGeneric } from "./generic";
 import { handleGithub } from "./github";
 import { text } from "./headers";
+import { landingHtml, wantsLandingHtml } from "./landing";
 import { MemoryCache } from "./memory-cache";
 import { handlePypi } from "./pypi";
 import { helpText, matchRoute } from "./route";
@@ -85,6 +86,19 @@ async function dispatch(ctx: Ctx): Promise<Response> {
     });
   }
 
+  if (route.kind === "home") {
+    if (wantsLandingHtml(ctx.request)) {
+      return new Response(landingHtml(ctx.host), {
+        status: 200,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "X-Proxyhub": "1",
+        },
+      });
+    }
+    return text(200, helpText());
+  }
+
   if (route.kind === "help") return text(404, helpText());
   if (route.kind === "v2-ping") return dockerPing();
 
@@ -124,6 +138,8 @@ export default {
   },
 };
 
+export { catalogItems } from "./catalog";
+export { landingHtml, snippetFor, wantsLandingHtml } from "./landing";
 export { matchRoute, helpText } from "./route";
 export { rangedFetch } from "./range";
 export { rewriteCratesConfig, rewriteNpmRegistry, rewritePypiIndex } from "./rewrite";
