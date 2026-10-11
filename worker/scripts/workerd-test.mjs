@@ -143,7 +143,9 @@ async function waitHttp(url, ms, log) {
 }
 
 async function fetchExact(url, init = {}, ms = REQUEST_MS) {
-  const resp = await fetch(url, { ...init, signal: AbortSignal.timeout(ms) });
+  const headers = new Headers(init.headers);
+  if (!headers.has("Accept-Encoding")) headers.set("Accept-Encoding", "identity");
+  const resp = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(ms) });
   const buf = new Uint8Array(await resp.arrayBuffer());
   return { resp, buf };
 }
@@ -244,8 +246,8 @@ describe("workerd integration (built worker.js)", { timeout: 180000 }, () => {
   it("small/direct GET / HEAD / Range on .html finish with exact bytes", async () => {
     const url = via("/small.html");
     const get = await fetchExact(url);
-    assert.equal(get.resp.status, 200, await textOr(get));
-    assert.equal(get.resp.headers.get("content-length"), String(SMALL_HTML.length));
+    assert.equal(get.resp.status, 200, headerDump(get));
+    assert.equal(get.resp.headers.get("content-length"), String(SMALL_HTML.length), headerDump(get));
     assert.deepEqual(get.buf, new Uint8Array(SMALL_HTML));
 
     const head = await fetchExact(url, { method: "HEAD" });
@@ -263,7 +265,7 @@ describe("workerd integration (built worker.js)", { timeout: 180000 }, () => {
   it("ranged/chunked GET / HEAD / Range on .bin finish with exact bytes", async () => {
     const url = via("/blob.bin");
     const get = await fetchExact(url);
-    assert.equal(get.resp.status, 200, await textOr(get));
+    assert.equal(get.resp.status, 200, headerDump(get));
     assert.equal(get.resp.headers.get("content-length"), String(BLOB.length));
     assert.deepEqual(get.buf, new Uint8Array(BLOB));
 
@@ -302,16 +304,19 @@ describe("workerd integration (built worker.js)", { timeout: 180000 }, () => {
       return;
     }
     const get = await fetchExact(`${workerUrl}/npm/left-pad`, {}, 15000);
-    assert.equal(get.resp.status, 200, new TextDecoder().decode(get.buf).slice(0, 300));
+    assert.equal(get.resp.status, 200, headerDump(get));
     const cl = get.resp.headers.get("content-length");
-    assert.ok(cl, "Content-Length must be present");
-    assert.equal(Number(cl), get.buf.byteLength);
+    assert.ok(cl, `Content-Length must be present\n${headerDump(get)}`);
+    assert.equal(Number(cl), get.buf.byteLength, headerDump(get));
     assert.ok(get.buf.byteLength > 0, "body must not be 0 bytes");
     const text = new TextDecoder().decode(get.buf);
     assert.match(text, /left-pad/);
   });
 });
 
-async function textOr(got) {
-  return new TextDecoder().decode(got.buf).slice(0, 400);
+function headerDump(got) {
+  const headers = [];
+  got.resp.headers.forEach((v, k) => headers.push(`${k}: ${v}`));
+  const preview = new TextDecoder().decode(got.buf.subarray(0, 240));
+  return `${got.resp.status} bytes=${got.buf.byteLength}\n${headers.join("\n")}\n${preview}`;
 }

@@ -7,7 +7,7 @@ import {
   parseRange,
   text,
 } from "./headers";
-import { constrainResponseToRange, rangedFetch, responseWithKnownLength } from "./range";
+import { constrainResponseToRange, rangedFetch, replayResponse, responseWithKnownLength } from "./range";
 import type { CacheMode } from "./cache";
 import type { Ctx } from "./types";
 import { fetchFollow } from "./upstream";
@@ -41,10 +41,9 @@ function applyExtra(resp: Response, extra?: Record<string, string>): Response {
   const headers = new Headers(resp.headers);
   headers.set("X-Proxyhub", "1");
   if (extra) for (const [k, v] of Object.entries(extra)) headers.set(k, v);
-  const cl = contentLength(headers);
-  const body = resp.body;
-  if (body && cl != null) return responseWithKnownLength(resp.status, headers, body, cl);
-  return new Response(body, { status: resp.status, headers });
+  // Header-only reconstruct. cachedGet already wrapped a known-length body;
+  // wrapping again would pipe FixedLengthStream into itself on workerd.
+  return new Response(resp.body, { status: resp.status, headers });
 }
 
 function finish(
@@ -56,9 +55,7 @@ function finish(
   if (cl) headers.set("Content-Length", cl);
   const cr = resp.headers.get("Content-Range");
   if (cr) headers.set("Content-Range", cr);
-  const n = contentLength(headers);
-  if (resp.body && n != null) return responseWithKnownLength(resp.status, headers, resp.body, n);
-  return new Response(resp.body, { status: resp.status, headers });
+  return replayResponse(resp.status, headers, resp.body);
 }
 
 function headReply(status: number, headers: Headers): Response {

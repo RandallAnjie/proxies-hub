@@ -1,5 +1,6 @@
 import { MAX_CACHE_BYTES } from "./config";
 import { contentLength, resolveByteRange, type ClientRange } from "./headers";
+import { replayResponse } from "./range";
 import type { Ctx } from "./types";
 
 export type CacheMode = "none" | "immutable" | "revalidate";
@@ -70,7 +71,7 @@ export async function cachedGet(
   if (mode === "immutable" && hit) {
     const headers = new Headers(hit.headers);
     headers.set("X-Proxyhub-Cache", "HIT");
-    return new Response(hit.body, { status: hit.status, headers });
+    return replayResponse(hit.status, headers, hit.body);
   }
 
   if (mode === "revalidate" && hit) {
@@ -85,13 +86,13 @@ export async function cachedGet(
     } catch {
       const headers = new Headers(hit.headers);
       headers.set("X-Proxyhub-Cache", "STALE");
-      return new Response(hit.body, { status: 200, headers });
+      return replayResponse(200, headers, hit.body);
     }
     if (fresh.status === 304 || fresh.status >= 500 || fresh.status === 429) {
       if (fresh.body) await fresh.body.cancel();
       const headers = new Headers(hit.headers);
       headers.set("X-Proxyhub-Cache", fresh.status === 304 ? "REVALIDATED" : "STALE");
-      return new Response(hit.body, { status: 200, headers });
+      return replayResponse(200, headers, hit.body);
     }
     if (fresh.status !== 200) return fresh;
     const rewritten = opts?.rewrite ? await opts.rewrite(fresh) : fresh;
@@ -101,7 +102,7 @@ export async function cachedGet(
     }
     const headers = new Headers(rewritten.headers);
     headers.set("X-Proxyhub-Cache", "MISS");
-    return new Response(rewritten.body, { status: rewritten.status, headers });
+    return replayResponse(rewritten.status, headers, rewritten.body);
   }
 
   const fresh = await doFetch();
@@ -114,7 +115,7 @@ export async function cachedGet(
   }
   const headers = new Headers(rewritten.headers);
   headers.set("X-Proxyhub-Cache", "MISS");
-  return new Response(rewritten.body, { status: rewritten.status, headers });
+  return replayResponse(rewritten.status, headers, rewritten.body);
 }
 
 export async function serveCachedRange(

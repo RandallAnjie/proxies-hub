@@ -133,6 +133,11 @@ export function responseWithKnownLength(
   return new Response(out, { status, headers });
 }
 
+/** Reconstruct a Response, wrapping at most once when Content-Length is known. */
+export function replayResponse(status: number, headers: Headers, body: ReadableStream<Uint8Array> | null): Response {
+  return responseWithKnownLength(status, headers, body, contentLength(headers));
+}
+
 function clientRangeOf(opts: RangeOpts): ClientRange | null {
   if (opts.clientStart === undefined && opts.clientEnd === undefined) return null;
   return {
