@@ -58,12 +58,6 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function brandHtml(host: string): string {
-  const i = host.indexOf(".");
-  if (i === -1) return escapeHtml(host);
-  return `${escapeHtml(host.slice(0, i))}<span class="dot">.</span>${escapeHtml(host.slice(i + 1))}`;
-}
-
 function metaFor(item: CatalogItem): Meta {
   return (
     META[item.id] ?? {
@@ -211,9 +205,11 @@ body{
 }
 .wrap{max-width:920px;margin:0 auto;padding:0 22px}
 header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:48px 0 8px}
-h1{font-family:var(--mono);font-size:clamp(22px,4.6vw,36px);margin:0;letter-spacing:-.5px;word-break:break-all}
+.brand{min-width:0;flex:1}
+h1{font-family:var(--mono);font-size:clamp(28px,6vw,40px);margin:0;letter-spacing:-.5px}
 h1 .dot{color:var(--accent)}
-.tag{color:var(--dim);font-family:var(--mono);font-size:13px;margin:8px 0 0}
+.host{font-family:var(--mono);font-size:13px;color:var(--ink);margin:8px 0 0;overflow-wrap:anywhere}
+.tag{color:var(--dim);font-family:var(--mono);font-size:13px;margin:6px 0 0}
 .hdr{display:flex;align-items:center;gap:10px;flex:0 0 auto}
 .docs{font-family:var(--mono);font-size:12px;color:var(--accent);text-decoration:none;border:1px solid var(--line);
   background:var(--panel);padding:8px 10px;border-radius:8px}
@@ -242,7 +238,7 @@ section{margin:0 0 28px}
   background:var(--accent-soft);padding:2px 7px;border-radius:4px}
 .sechead h2{font-size:17px;margin:0;font-weight:600}
 .sechead .hint{color:var(--dim);font-size:12.5px;font-family:var(--mono);margin-left:auto}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 12px 10px;min-width:0}
 .cardh{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
 .cardh h3{margin:0;font-size:15px}
@@ -251,9 +247,10 @@ section{margin:0 0 28px}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .codewrap{position:relative}
 pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;padding-right:52px;
-  overflow:auto;font-family:var(--mono);font-size:12px;margin:0;line-height:1.45}
+  overflow:auto;font-family:var(--mono);font-size:12px;margin:0;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
 .cp{position:absolute;top:6px;right:6px;cursor:pointer;border:1px solid var(--line);
-  background:var(--panel);color:var(--dim);font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:5px}
+  background:var(--panel);color:var(--dim);font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:5px;
+  min-width:52px;text-align:center}
 .cp:hover{color:var(--accent);border-color:var(--accent)}
 .cp.ok{color:var(--ok);border-color:var(--ok)}
 #empty{display:none;color:var(--dim);font-family:var(--mono);font-size:13px;margin:8px 0 24px}
@@ -264,7 +261,7 @@ a.dom{font-family:var(--mono);color:var(--accent);text-decoration:none}
 .reveal{opacity:0;transform:translateY(8px);animation:rise .5s ease forwards}
 @keyframes rise{to{opacity:1;transform:none}}
 @media (max-width:640px){
-  header{padding-top:28px;flex-wrap:wrap}
+  header{padding-top:28px}
   .cards{grid-template-columns:1fr}
   .sechead{flex-wrap:wrap}
   .toolbar .lab{display:none}
@@ -274,8 +271,9 @@ a.dom{font-family:var(--mono);color:var(--accent);text-decoration:none}
 <body>
 <div class="wrap">
   <header>
-    <div>
-      <h1>${brandHtml(host)}</h1>
+    <div class="brand">
+      <h1>proxy<span class="dot">hub</span></h1>
+      <p class="host">${escapeHtml(host)}</p>
       <p class="tag">A single, hackable pull-through mirror proxy</p>
     </div>
     <div class="hdr">
