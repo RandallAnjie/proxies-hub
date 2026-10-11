@@ -22,6 +22,15 @@ function cacheReq(key: string): Request {
   return new Request("https://ph.cache/" + encodeURIComponent(key), { method: "GET" });
 }
 
+async function matchSafe(ctx: Ctx, key: string): Promise<Response | undefined> {
+  try {
+    return await ctx.runtime.cache.match(cacheReq(key));
+  } catch {
+    // SafeCache already swallows this; keep a miss if an unwrapped cache throws.
+    return undefined;
+  }
+}
+
 function applyExtra(resp: Response, extra?: Record<string, string>): Response {
   const headers = new Headers(resp.headers);
   headers.set("X-Proxyhub", "1");
@@ -53,7 +62,7 @@ async function putIfSmall(ctx: Ctx, key: string, resp: Response): Promise<Respon
   try {
     await ctx.runtime.cache.put(cacheReq(key), stored);
   } catch {
-    /* caches.default may reject */
+    /* best-effort: oversized, uncacheable, or a broken Cache API */
   }
   return out;
 }
@@ -66,7 +75,7 @@ export async function proxy(ctx: Ctx, opts: ProxyOpts): Promise<Response> {
 
   if (method === "HEAD") {
     if (mode === "immutable" && opts.cacheKey) {
-      const hit = await ctx.runtime.cache.match(cacheReq(opts.cacheKey));
+      const hit = await matchSafe(ctx, opts.cacheKey);
       if (hit) {
         const headers = new Headers(hit.headers);
         headers.set("X-Proxyhub-Cache", "HIT");
@@ -110,7 +119,7 @@ export async function proxy(ctx: Ctx, opts: ProxyOpts): Promise<Response> {
   }
 
   if (mode === "immutable" && opts.cacheKey) {
-    const hit = await ctx.runtime.cache.match(cacheReq(opts.cacheKey));
+    const hit = await matchSafe(ctx, opts.cacheKey);
     if (hit) {
       if (clientRange) return serveCachedRange(hit, clientRange.start, clientRange.end);
       const headers = new Headers(hit.headers);
