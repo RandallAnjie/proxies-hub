@@ -68,10 +68,10 @@ describe("matchRoute", () => {
     }
   });
 
-  it("docs and unknown paths", () => {
+  it("docs, home, and unknown paths", () => {
     assert.deepEqual(matchRoute("/docs"), { kind: "docs" });
+    assert.equal(matchRoute("/").kind, "home");
     assert.equal(matchRoute("/nope").kind, "help");
-    assert.equal(matchRoute("/").kind, "help");
   });
 });
 

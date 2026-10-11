@@ -3,15 +3,15 @@ import { rewriteCratesConfig } from "./rewrite";
 import type { Ctx } from "./types";
 import { fetchJson } from "./upstream";
 
-const INDEX = "https://index.crates.io";
-const STATIC = "https://static.crates.io/crates";
+export const CRATES_INDEX = "https://index.crates.io";
+export const CRATES_STATIC = "https://static.crates.io/crates";
 const UA = { "User-Agent": "proxyhub-crates" };
 
 export async function handleCrates(ctx: Ctx, path: string, prefix: string): Promise<Response> {
   const p = path.split("?")[0];
 
   if (p === "/config.json" || p === "/config.json/") {
-    const { status, data } = await fetchJson(ctx.runtime.fetch, `${INDEX}/config.json`, UA);
+    const { status, data } = await fetchJson(ctx.runtime.fetch, `${CRATES_INDEX}/config.json`, UA);
     if (!data || typeof data !== "object") {
       return new Response("crates config unavailable\n", {
         status: 502,
@@ -28,7 +28,7 @@ export async function handleCrates(ctx: Ctx, path: string, prefix: string): Prom
   if (p.startsWith("/dl/")) {
     const rest = p.slice("/dl/".length);
     return proxy(ctx, {
-      url: `${STATIC}/${rest}`,
+      url: `${CRATES_STATIC}/${rest}`,
       headers: UA,
       cacheKey: `crates:file:${rest}`,
       cacheMode: "immutable",
@@ -37,7 +37,7 @@ export async function handleCrates(ctx: Ctx, path: string, prefix: string): Prom
   }
 
   return proxy(ctx, {
-    url: `${INDEX}${p}`,
+    url: `${CRATES_INDEX}${p}`,
     headers: UA,
     cacheKey: `crates:idx:${p}`,
     cacheMode: "revalidate",

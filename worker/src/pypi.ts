@@ -5,15 +5,15 @@ import { rewritePypiIndex } from "./rewrite";
 import type { Ctx } from "./types";
 import { fetchFollow } from "./upstream";
 
-const SIMPLE = "https://pypi.org/simple";
-const FILES = "https://files.pythonhosted.org";
+export const PYPI_SIMPLE = "https://pypi.org/simple";
+export const PYPI_FILES = "https://files.pythonhosted.org";
 
 export async function handlePypi(ctx: Ctx, path: string, prefix: string): Promise<Response> {
   const pathname = path.split("?")[0];
 
   if (pathname.startsWith("/files/")) {
     const rest = pathname.slice("/files/".length);
-    const url = new URL(`${FILES}/${rest}`);
+    const url = new URL(`${PYPI_FILES}/${rest}`);
     const src = new URL(ctx.request.url);
     src.searchParams.forEach((v, k) => url.searchParams.append(k, v));
     return proxy(ctx, {
@@ -33,7 +33,7 @@ export async function handlePypi(ctx: Ctx, path: string, prefix: string): Promis
     }
   }
   if (!sub.startsWith("/")) sub = "/" + sub;
-  const url = SIMPLE + sub;
+  const url = PYPI_SIMPLE + sub;
   const accept = joinHeader(ctx.request.headers, "Accept", "text/html");
   const filesBase = `${ctx.origin}${prefix}/files/`;
   return cachedGet(

@@ -2,6 +2,7 @@ import { config } from "./config";
 
 export type Route =
   | { kind: "docs" }
+  | { kind: "home" }
   | { kind: "help" }
   | { kind: "v2-ping" }
   | { kind: "docker"; registry: string; path: string }
@@ -27,6 +28,7 @@ export function publicServices(): string[] {
 /** Path dispatch matching `AllProxy.handle` plus `/docs` on this host. */
 export function matchRoute(pathname: string): Route {
   const path = pathname === "" ? "/" : pathname;
+  if (path === "/") return { kind: "home" };
   if (path === "/docs" || path === "/docs/") return { kind: "docs" };
   if (path === "/v2" || path === "/v2/") return { kind: "v2-ping" };
   if (path.startsWith("/v2/")) {

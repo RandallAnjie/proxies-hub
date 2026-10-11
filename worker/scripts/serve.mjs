@@ -51,5 +51,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  console.log(`proxies-hub worker on http://127.0.0.1:${port}  (docs: /docs)`);
+  console.log(`proxies-hub worker on http://127.0.0.1:${port}  (landing: /  docs: /docs)`);
 });
