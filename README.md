@@ -158,7 +158,12 @@ src/proxyhub/
     all.py            single-host path dispatcher
   static/             monitor.html + docs.html (dashboard templates)
 tests/                cache, ranged fetch + token refresh, hourly/rolling history
+worker/               RandallFlare / workerd port of the `all` entrypoint (step 1)
 ```
+
+A **stateless Workers** build of the single-host `all` entrypoint lives in
+[`worker/`](worker/). RandallFlare builds it with `cd worker && npm ci && npm run build`
+→ `worker/dist/worker.js`. See that README for env/secrets and all-style usage.
 
 CI runs `ruff` + `pytest`; images publish to Docker Hub (`ranjie/proxies`,
 amd64 + arm64 built natively).

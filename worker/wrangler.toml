@@ -1,0 +1,9 @@
+# Local workerd/wrangler smoke host. RandallFlare builds dist/worker.js from git
+# (`npm ci && npm run build`) and does not require this file at deploy time.
+name = "proxies-hub"
+main = "dist/worker.js"
+compatibility_date = "2025-10-01"
+
+[vars]
+# Optional. Alias `?token=team` (and Basic username/password `team`) maps here.
+# GITHUB_PAT = ""
