@@ -183,6 +183,9 @@ export async function proxy(ctx: Ctx, opts: ProxyOpts): Promise<Response> {
     if (opts.extraOut) {
       for (const [k, v] of Object.entries(opts.extraOut)) result.headers.set(k, v);
     }
+    // Single wrap for the ranged path. rangedFetch returns a plain stitch /
+    // passthrough stream; wrapping here (and only here) keeps Content-Length
+    // on workerd without piping FixedLengthStream into itself.
     const length = contentLength(result.headers);
     const resp = responseWithKnownLength(result.status, result.headers, result.body, length);
     if (mode === "immutable" && opts.cacheKey && !clientRange) {

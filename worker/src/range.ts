@@ -45,29 +45,80 @@ function fixedLengthStreamCtor(): FixedLengthStreamCtor | undefined {
   return typeof ctor === "function" ? ctor : undefined;
 }
 
+/** Streams already passed through `asFixedLength` — never wrap twice. */
+const wrappedBodies = new WeakSet<ReadableStream<Uint8Array>>();
+
 /**
  * Preserve Content-Length on a streamed body. workerd drops the header unless
- * the body is a FixedLengthStream (or a buffer). Falls back to the original
- * stream when the constructor is missing or throws.
+ * the body is a FixedLengthStream (or a buffer).
+ *
+ * Wraps at most once. Pumps with reader/writer instead of `pipeTo` — workerd
+ * rejects Inter-TransformStream `ReadableStream.pipeTo()` (FixedLengthStream
+ * or TransformStream into another), and the old `void pipeTo().catch()` left
+ * the client with headers + Content-Length and 0 bytes until the request
+ * hung. A failed pump aborts the destination so the readable errors; if
+ * FixedLengthStream is missing or its constructor throws, returns `body`.
  */
 export function asFixedLength(
   body: ReadableStream<Uint8Array>,
   length: number,
 ): ReadableStream<Uint8Array> {
+  if (wrappedBodies.has(body)) return body;
   const Ctor = fixedLengthStreamCtor();
   if (!Ctor || !Number.isFinite(length) || length < 0) return body;
+  let fls: FixedLengthStreamLike;
   try {
-    const fls = new Ctor(length);
-    void body.pipeTo(fls.writable).catch(() => {
-      try {
-        fls.writable.abort();
-      } catch {
-        /* already closed */
-      }
-    });
-    return fls.readable;
+    fls = new Ctor(length);
   } catch {
     return body;
+  }
+  wrappedBodies.add(fls.readable);
+  void pumpToWritable(body, fls.writable).catch(() => {
+    try {
+      fls.writable.abort();
+    } catch {
+      /* pump already aborted or dest closed */
+    }
+  });
+  return fls.readable;
+}
+
+async function pumpToWritable(
+  src: ReadableStream<Uint8Array>,
+  dest: WritableStream<Uint8Array>,
+): Promise<void> {
+  const reader = src.getReader();
+  const writer = dest.getWriter();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.byteLength) await writer.write(value);
+    }
+    await writer.close();
+  } catch (err) {
+    try {
+      await writer.abort(err);
+    } catch {
+      /* destination already errored or closed */
+    }
+    try {
+      await reader.cancel(err);
+    } catch {
+      /* source already closed */
+    }
+    throw err;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* already released */
+    }
+    try {
+      writer.releaseLock();
+    } catch {
+      /* already released */
+    }
   }
 }
 
@@ -197,8 +248,8 @@ export async function rangedFetch(opts: RangeOpts): Promise<RangeResult> {
   if (client) extra["Content-Range"] = `bytes ${start}-${last}/${total}`;
   const headers = copyUpstreamHeaders(first.headers, extra, { drop: ["content-range"] });
 
-  const raw = stitch(opts, auth, first, start, last, chunkSize, rangeHonoured, firstCr);
-  const body = asFixedLength(raw, length);
+  // Plain stitch stream — wrap once at responseWithKnownLength, not here.
+  const body = stitch(opts, auth, first, start, last, chunkSize, rangeHonoured, firstCr);
   return {
     status: client ? 206 : 200,
     headers,
@@ -218,8 +269,7 @@ async function fallbackPassthrough(
   });
   if (!client) {
     if (total > 0) headers.set("Content-Length", String(total));
-    const body = first.body && total > 0 ? asFixedLength(first.body, total) : first.body;
-    return { status: first.status >= 400 ? first.status : 200, headers, body, total };
+    return { status: first.status >= 400 ? first.status : 200, headers, body: first.body, total };
   }
   if (total > 0) {
     const resolved = resolveByteRange(client, total);
@@ -233,7 +283,7 @@ async function fallbackPassthrough(
       headers.set("Content-Length", String(length));
       headers.set("Content-Range", `bytes ${resolved.start}-${resolved.last}/${total}`);
       headers.set("Accept-Ranges", "bytes");
-      return { status: 206, headers, body: asFixedLength(sliced, length), total };
+      return { status: 206, headers, body: sliced, total };
     }
     headers.set("Content-Length", String(length));
     headers.set("Content-Range", `bytes ${resolved.start}-${resolved.last}/${total}`);
@@ -247,7 +297,7 @@ async function fallbackPassthrough(
     return {
       status: 200,
       headers,
-      body: known > 0 ? asFixedLength(sliced, known) : sliced,
+      body: sliced,
       total,
     };
   }

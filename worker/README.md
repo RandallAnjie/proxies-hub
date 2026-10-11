@@ -25,7 +25,8 @@ export default {
 Local checks:
 
 ```bash
-npm test                 # unit tests (mock fetch)
+npm test                 # unit tests + workerd GET/HEAD/Range against built worker.js
+npm run test:workerd     # real workerd only (`npx wrangler@4 dev --local`)
 npm run test:integration # live docker/pypi/git/crates (needs egress)
 npm start                # Node host on :8787 with an in-memory Cache
 npx wrangler@4 dev       # real workerd, if you have wrangler
