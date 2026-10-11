@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { serveCachedRange } from "../src/cache";
-import { parseRange, resolveByteRange } from "../src/headers";
+import { contentLength, parseRange, resolveByteRange } from "../src/headers";
 import { createHandler, MemoryCache } from "../src/index";
 import { constrainResponseToRange, asFixedLength, rangedFetch, responseWithKnownLength } from "../src/range";
 
@@ -171,6 +171,18 @@ function objectFetch(payload: string) {
 async function bodyOf(result: { body: ReadableStream<Uint8Array> | null }): Promise<string> {
   return new Response(result.body).text();
 }
+
+describe("contentLength", () => {
+  it("reads a length that Headers.get hides (workerd fetch)", () => {
+    const h = new Headers({ "Content-Type": "text/plain", "Content-Length": "4" });
+    const orig = h.get.bind(h);
+    h.get = (name: string) => {
+      if (String(name).toLowerCase() === "content-length") return null;
+      return orig(name);
+    };
+    assert.equal(contentLength(h), 4);
+  });
+});
 
 describe("parseRange", () => {
   it("parses closed, open-ended, and suffix forms", () => {

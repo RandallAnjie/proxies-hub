@@ -51,8 +51,8 @@ function finish(
   extraOut?: Record<string, string>,
 ): Response {
   const headers = copyUpstreamHeaders(resp.headers, extraOut, { keepEncoding: true });
-  const cl = resp.headers.get("Content-Length");
-  if (cl) headers.set("Content-Length", cl);
+  const n = contentLength(resp.headers);
+  if (n != null) headers.set("Content-Length", String(n));
   const cr = resp.headers.get("Content-Range");
   if (cr) headers.set("Content-Range", cr);
   return replayResponse(resp.status, headers, resp.body);

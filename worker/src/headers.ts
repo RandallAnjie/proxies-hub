@@ -127,10 +127,23 @@ export function joinHeader(headers: Headers, name: string, fallback: string): st
   return v && v.length ? v : fallback;
 }
 
+/**
+ * Content-Length from a Headers map. workerd's fetch() exposes the header to
+ * `forEach` but `get("Content-Length")` is null (forbidden response header),
+ * so we iterate when get() misses.
+ */
 export function contentLength(headers: Headers): number | null {
-  const raw = headers.get("Content-Length");
-  if (raw == null || raw === "") return null;
-  const n = Number(raw);
+  const raw = headers.get("Content-Length") ?? headers.get("content-length");
+  if (raw != null && raw !== "") {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  let found: string | null = null;
+  headers.forEach((value, key) => {
+    if (key.toLowerCase() === "content-length") found = value;
+  });
+  if (found == null || found === "") return null;
+  const n = Number(found);
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
 

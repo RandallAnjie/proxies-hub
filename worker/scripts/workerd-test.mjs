@@ -4,8 +4,9 @@
  * Content-Length, finishing in a few seconds (the PR #3 hang was ~15s / 0B).
  *
  * Mock origin:
- *   *.html  → generic small/direct path (finish / constrainResponseToRange)
- *   *.bin   → rangedFetch / stitch path
+ *   index.yaml → generic small/direct path (finish / constrainResponseToRange)
+ *                (not .html — wrangler --local injects a live-reload tag)
+ *   *.bin      → rangedFetch / stitch path
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -20,7 +21,7 @@ import { after, before, describe, it } from "node:test";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const REQUEST_MS = 8000;
 
-const SMALL_HTML = Buffer.from("<!doctype html><title>ph-workerd</title>" + "A".repeat(256));
+const SMALL_YAML = Buffer.from("name: ph-workerd\npayload: " + "A".repeat(256) + "\n");
 const BLOB = Buffer.alloc(8192);
 for (let i = 0; i < BLOB.length; i++) BLOB[i] = i & 0xff;
 
@@ -59,7 +60,7 @@ function parseBytesRange(header, total) {
 function startOrigin() {
   return new Promise((resolve, reject) => {
     const files = new Map([
-      ["/small.html", { body: SMALL_HTML, type: "text/html; charset=utf-8" }],
+      ["/index.yaml", { body: SMALL_YAML, type: "text/yaml; charset=utf-8" }],
       ["/blob.bin", { body: BLOB, type: "application/octet-stream" }],
     ]);
     const server = createServer((req, res) => {
@@ -167,6 +168,8 @@ function startWrangler(port, inspectorPort, persistDir) {
     "--config",
     "wrangler.toml",
     "--no-bundle",
+    "--live-reload",
+    "false",
     "--log-level",
     "info",
   ];
@@ -243,23 +246,23 @@ describe("workerd integration (built worker.js)", { timeout: 180000 }, () => {
     return `${workerUrl}/cache/http/${host}${path}`;
   }
 
-  it("small/direct GET / HEAD / Range on .html finish with exact bytes", async () => {
-    const url = via("/small.html");
+  it("small/direct GET / HEAD / Range on index.yaml finish with exact bytes", async () => {
+    const url = via("/index.yaml");
     const get = await fetchExact(url);
     assert.equal(get.resp.status, 200, headerDump(get));
-    assert.equal(get.resp.headers.get("content-length"), String(SMALL_HTML.length), headerDump(get));
-    assert.deepEqual(get.buf, new Uint8Array(SMALL_HTML));
+    assert.equal(get.resp.headers.get("content-length"), String(SMALL_YAML.length), headerDump(get));
+    assert.deepEqual(get.buf, new Uint8Array(SMALL_YAML));
 
     const head = await fetchExact(url, { method: "HEAD" });
     assert.equal(head.resp.status, 200);
-    assert.equal(head.resp.headers.get("content-length"), String(SMALL_HTML.length));
+    assert.equal(head.resp.headers.get("content-length"), String(SMALL_YAML.length));
     assert.equal(head.buf.byteLength, 0);
 
     const ranged = await fetchExact(url, { headers: { Range: "bytes=0-15" } });
     assert.equal(ranged.resp.status, 206);
     assert.equal(ranged.resp.headers.get("content-length"), "16");
-    assert.equal(ranged.resp.headers.get("content-range"), `bytes 0-15/${SMALL_HTML.length}`);
-    assert.deepEqual(ranged.buf, new Uint8Array(SMALL_HTML.subarray(0, 16)));
+    assert.equal(ranged.resp.headers.get("content-range"), `bytes 0-15/${SMALL_YAML.length}`);
+    assert.deepEqual(ranged.buf, new Uint8Array(SMALL_YAML.subarray(0, 16)));
   });
 
   it("ranged/chunked GET / HEAD / Range on .bin finish with exact bytes", async () => {
