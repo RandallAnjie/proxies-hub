@@ -28,11 +28,17 @@ export function catalogItems(): CatalogItem[] {
     upstream: config.docker[id].upstream,
     family: "docker" as const,
   }));
+  const generic: CatalogItem = {
+    id: "r",
+    prefix: "/v2/r",
+    upstream: "https://<registry-host>/v2",
+    family: "docker",
+  };
   const services = publicServices().map((id) => ({
     id,
     prefix: `/${id}`,
     upstream: serviceUpstream(id),
     family: "service" as const,
   }));
-  return [...docker, ...services];
+  return [...docker, generic, ...services];
 }

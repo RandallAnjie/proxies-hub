@@ -46,6 +46,11 @@ describe("catalogItems", () => {
     for (const id of ["github", "pypi", "crates", "apt", "cache"]) {
       assert.ok(ids.has(id), `missing service ${id}`);
     }
+    const generic = items.find((i) => i.id === "r");
+    assert.ok(generic, "missing generic /v2/r catalog item");
+    assert.equal(generic?.prefix, "/v2/r");
+    assert.equal(generic?.upstream, "https://<registry-host>/v2");
+    assert.equal(generic?.family, "docker");
   });
 });
 
@@ -107,6 +112,8 @@ describe("GET / landing", () => {
     assert.match(html, /prefers-color-scheme/);
 
     assert.match(html, /docker pull edge\.example\/hub\/library\/nginx/);
+    assert.match(html, /docker login edge\.example/);
+    assert.match(html, /docker pull edge\.example\/r\/&lt;registry-host&gt;/);
     assert.match(html, /ollama pull edge\.example\/ollama\/library\/llama3/);
     assert.match(html, /pip install -i https:\/\/edge\.example\/pypi\/index\//);
     assert.match(html, /uv pip install --index-url https:\/\/edge\.example\/pypi\/index\//);

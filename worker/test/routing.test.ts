@@ -8,6 +8,35 @@ describe("matchRoute", () => {
     assert.deepEqual(matchRoute("/v2/"), { kind: "v2-ping" });
   });
 
+  it("dispatches generic docker /v2/r/<registry-host>/… and /token/…", () => {
+    assert.deepEqual(matchRoute("/v2/r/ghcr.io/jqlang/jq/manifests/latest"), {
+      kind: "docker-generic",
+      registryHost: "ghcr.io",
+      path: "/v2/jqlang/jq/manifests/latest",
+    });
+    assert.deepEqual(matchRoute("/v2/r/release.cloudreve.org/cloudreve/pro/manifests/latest"), {
+      kind: "docker-generic",
+      registryHost: "release.cloudreve.org",
+      path: "/v2/cloudreve/pro/manifests/latest",
+    });
+    assert.deepEqual(
+      matchRoute("/v2/r/reg.example.com:5000/foo/bar/blobs/sha256:" + "ab".repeat(32)),
+      {
+        kind: "docker-generic",
+        registryHost: "reg.example.com:5000",
+        path: "/v2/foo/bar/blobs/sha256:" + "ab".repeat(32),
+      },
+    );
+    assert.deepEqual(matchRoute("/token/r/ghcr.io"), {
+      kind: "docker-token",
+      target: { kind: "generic", registryHost: "ghcr.io" },
+    });
+    assert.deepEqual(matchRoute("/token/ghcr"), {
+      kind: "docker-token",
+      target: { kind: "fixed", registry: "ghcr" },
+    });
+  });
+
   it("dispatches docker /v2/<registry>/…", () => {
     assert.deepEqual(matchRoute("/v2/hub/library/nginx/manifests/latest"), {
       kind: "docker",
@@ -91,6 +120,7 @@ describe("handler routing", () => {
     assert.match(body, /all-in-one/);
     assert.match(body, /hub/);
     assert.match(body, /pypi/);
+    assert.match(body, /\/v2\/r\/<registry-host>/);
     assert.equal(body, helpText());
   });
 
@@ -107,6 +137,10 @@ describe("handler routing", () => {
     assert.equal(md.headers.get("Content-Type")?.includes("markdown"), true);
     const text = await md.text();
     assert.match(text, /docker pull edge.example\/hub/);
+    assert.match(text, /docker pull edge.example\/r\/ghcr.io/);
+    assert.match(text, /docker login edge.example/);
+    assert.match(text, /never cached/);
+    assert.match(text, /one credential per registry host/);
     assert.match(text, /pypi\/index/);
     assert.doesNotMatch(text, /hub\.docker\./);
 

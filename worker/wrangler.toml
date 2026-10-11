@@ -7,3 +7,7 @@ compatibility_date = "2025-10-01"
 [vars]
 # Optional. Alias `?token=team` (and Basic username/password `team`) maps here.
 # GITHUB_PAT = ""
+# Comma-separated hosts or *.wildcards for /v2/r/… ; unset = any public host.
+# GENERIC_REGISTRY_ALLOWLIST = ""
+# Exact host[:port] allowed over http (workerd tests / LAN registries).
+# GENERIC_REGISTRY_HTTP_ORIGINS = ""

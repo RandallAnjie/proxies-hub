@@ -56,6 +56,8 @@ npx wrangler@4 dev       # real workerd, if you have wrangler
 | --- | --- |
 | `/v2` | local docker ping |
 | `/v2/<registry>/…` | public docker/OCI: `hub`, `ghcr`, `gcr`, `k8s-gcr`, `k8s`, `quay`, `mcr`, `elastic`, `nvcr`, `ollama` |
+| `/v2/r/<registry-host>/…` | any OCI registry → `https://<registry-host>/v2/…` (credential pass-through) |
+| `/token/r/<registry-host>` `/token/<registry>` | docker token broker (rewrites scope; forwards client Basic or anonymous) |
 | `/github/…` | GitHub smart-HTTP, raw, archives, releases |
 | `/pypi/index/…` `/pypi/simple/…` | PyPI simple index (file links rewritten) |
 | `/pypi/files/…` | `files.pythonhosted.org` |
@@ -67,16 +69,22 @@ npx wrangler@4 dev       # real workerd, if you have wrangler
 | `/docs` | Markdown for curl/wget/empty-UA; HTML for browsers |
 | anything else | 404 + help text |
 
-No per-service subdomains. No private/credentialed docker sources.
+No per-service subdomains. Docker credentials are never stored: `docker login
+<host>` plus a pull forwards Basic (or exchanges it at `/token/…` for Bearer
+upstreams). Authenticated responses, including blobs, are not cached.
 
 Upstreams live in [`src/config.ts`](src/config.ts) (same public set as
-`config.default.yaml`).
+`config.default.yaml`). Generic `/v2/r/` hosts are validated (no private /
+loopback / link-local IP literals, no userinfo). Optional
+`GENERIC_REGISTRY_ALLOWLIST` further restricts hosts.
 
 ## Env / secrets
 
 | Binding | Required | Purpose |
 | --- | --- | --- |
 | `GITHUB_PAT` | no | Value for the `team` token alias (`?token=team` or Basic username/password `team`). Without it, GitHub is public-only (a raw `?token=<pat>` still works). |
+| `GENERIC_REGISTRY_ALLOWLIST` | no | Comma-separated registry hosts or `*.` wildcards for `/v2/r/…`. Unset = any public host. |
+| `GENERIC_REGISTRY_HTTP_ORIGINS` | no | Exact `host[:port]` entries allowed over `http://` (local tests / LAN). |
 
 No D1 / R2 / KV / Durable Object bindings in step 1.
 
@@ -84,11 +92,17 @@ No D1 / R2 / KV / Durable Object bindings in step 1.
 
 ```bash
 docker pull <host>/hub/library/nginx
+docker pull <host>/r/ghcr.io/<owner>/<image>
+docker login <host>
+docker pull <host>/r/release.cloudreve.org/cloudreve/pro:latest
 ollama pull <host>/ollama/library/llama3
 pip install -i https://<host>/pypi/index/ requests
 git clone https://<host>/github/github.com/<u>/<r>
 # cargo: index = "sparse+https://<host>/crates/"
 npm config set registry https://<host>/npm
 ```
+
+Docker stores one credential per registry host, so a login to `<host>` is shared
+by every image pulled through that hostname.
 
 See `/docs` on a running worker for the full all-style cheat sheet.
