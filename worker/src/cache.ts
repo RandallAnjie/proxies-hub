@@ -31,14 +31,15 @@ async function putSafe(ctx: Ctx, key: string, resp: Response): Promise<void> {
   try {
     await ctx.runtime.cache.put(cacheRequest(key), resp);
   } catch {
-    // caches.default may reject oversized or uncacheable responses
+    // best-effort: oversized, uncacheable, or a broken Cache API
   }
 }
 
 /**
- * caches.default helper. Never stores non-200. Indexes keep a long stored TTL
- * so stale-if-error still has a body after our short freshness window; we
- * always revalidate those ourselves.
+ * Cache helper. Never stores non-200. Indexes keep a long stored TTL so
+ * stale-if-error still has a body after our short freshness window; we
+ * always revalidate those ourselves. `match` / `put` are best-effort — a
+ * thrown Cache API (e.g. workerd with no cache binding) is a miss, not a 502.
  */
 export async function cachedGet(
   ctx: Ctx,
@@ -58,7 +59,13 @@ export async function cachedGet(
     return opts?.rewrite && resp.status === 200 ? opts.rewrite(resp) : resp;
   }
 
-  const hit = await ctx.runtime.cache.match(cacheRequest(key));
+  let hit: Response | undefined;
+  try {
+    hit = await ctx.runtime.cache.match(cacheRequest(key));
+  } catch {
+    // SafeCache already swallows this; keep a miss if an unwrapped cache throws.
+    hit = undefined;
+  }
 
   if (mode === "immutable" && hit) {
     const headers = new Headers(hit.headers);

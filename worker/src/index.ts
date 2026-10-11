@@ -9,6 +9,7 @@ import { text } from "./headers";
 import { MemoryCache } from "./memory-cache";
 import { handlePypi } from "./pypi";
 import { helpText, matchRoute } from "./route";
+import { nativeDefaultCache, wrapCache } from "./safe-cache";
 import type { Ctx, Env, ExecutionContext, FetchFn, Runtime } from "./types";
 import { handleWeb } from "./web";
 
@@ -23,12 +24,9 @@ export type HandlerOptions = {
 };
 
 function runtimeOf(opts: HandlerOptions | undefined, ctx: ExecutionContext | undefined): Runtime {
-  const cache =
-    opts?.cache ??
-    (typeof globalThis !== "undefined" && "caches" in globalThis
-      ? (globalThis as unknown as { caches?: { default?: Cache } }).caches?.default
-      : undefined) ??
-    fallbackCache;
+  // Prefer a platform Cache (native or shim on globalThis). Wrap every
+  // implementation: match/put/delete must never 502 a request.
+  const cache = wrapCache(opts?.cache ?? nativeDefaultCache() ?? fallbackCache);
   return {
     fetch: opts?.fetch ?? globalThis.fetch.bind(globalThis),
     cache,
