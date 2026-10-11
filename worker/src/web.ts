@@ -71,7 +71,8 @@ export async function handleWeb(ctx: Ctx, name: string, path: string, prefix: st
     });
   }
 
-  const mode = method === "GET" && cacheable ? "immutable" : "none";
+  const mode =
+    cacheable && (method === "GET" || method === "HEAD") ? "immutable" : "none";
   return proxy(ctx, {
     url: target,
     headers,

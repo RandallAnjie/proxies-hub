@@ -1,7 +1,13 @@
 import { cachedGet, serveCachedRange } from "./cache";
 import { MAX_CACHE_BYTES, RANGE_CHUNK } from "./config";
-import { contentLength, copyUpstreamHeaders, parseRange, text } from "./headers";
-import { rangedFetch } from "./range";
+import {
+  contentLength,
+  copyUpstreamHeaders,
+  parseContentRangeTotal,
+  parseRange,
+  text,
+} from "./headers";
+import { constrainResponseToRange, rangedFetch, responseWithKnownLength } from "./range";
 import type { CacheMode } from "./cache";
 import type { Ctx } from "./types";
 import { fetchFollow } from "./upstream";
@@ -35,7 +41,10 @@ function applyExtra(resp: Response, extra?: Record<string, string>): Response {
   const headers = new Headers(resp.headers);
   headers.set("X-Proxyhub", "1");
   if (extra) for (const [k, v] of Object.entries(extra)) headers.set(k, v);
-  return new Response(resp.body, { status: resp.status, headers });
+  const cl = contentLength(headers);
+  const body = resp.body;
+  if (body && cl != null) return responseWithKnownLength(resp.status, headers, body, cl);
+  return new Response(body, { status: resp.status, headers });
 }
 
 function finish(
@@ -47,7 +56,13 @@ function finish(
   if (cl) headers.set("Content-Length", cl);
   const cr = resp.headers.get("Content-Range");
   if (cr) headers.set("Content-Range", cr);
+  const n = contentLength(headers);
+  if (resp.body && n != null) return responseWithKnownLength(resp.status, headers, resp.body, n);
   return new Response(resp.body, { status: resp.status, headers });
+}
+
+function headReply(status: number, headers: Headers): Response {
+  return new Response(null, { status, headers });
 }
 
 async function putIfSmall(ctx: Ctx, key: string, resp: Response): Promise<Response> {
@@ -67,6 +82,50 @@ async function putIfSmall(ctx: Ctx, key: string, resp: Response): Promise<Respon
   return out;
 }
 
+async function headProxy(ctx: Ctx, opts: ProxyOpts, mode: CacheMode): Promise<Response> {
+  if (mode === "immutable" && opts.cacheKey) {
+    const hit = await matchSafe(ctx, opts.cacheKey);
+    if (hit) {
+      const headers = new Headers(hit.headers);
+      headers.set("X-Proxyhub-Cache", "HIT");
+      if (opts.extraOut) for (const [k, v] of Object.entries(opts.extraOut)) headers.set(k, v);
+      if (hit.body) await hit.body.cancel();
+      return headReply(200, headers);
+    }
+  }
+  const resp = await fetchFollow(ctx.runtime.fetch, opts.url, {
+    method: "HEAD",
+    headers: opts.headers,
+    signal: ctx.request.signal,
+  });
+  const headers = copyUpstreamHeaders(resp.headers, opts.extraOut, { keepEncoding: true });
+  let cl = contentLength(resp.headers);
+  if (resp.body) await resp.body.cancel();
+
+  const headOk = resp.status === 200 || resp.status === 204;
+  const tryProbe = cl == null && opts.ranged && (headOk || resp.status === 405);
+  if (tryProbe) {
+    const h = new Headers(opts.headers);
+    h.set("Range", "bytes=0-0");
+    const probe = await fetchFollow(ctx.runtime.fetch, opts.url, {
+      method: "GET",
+      headers: h,
+      signal: ctx.request.signal,
+    });
+    const total = parseContentRangeTotal(probe.headers.get("Content-Range"));
+    const probeCl = contentLength(probe.headers);
+    if (probe.body) await probe.body.cancel();
+    if (total != null && total >= 0) cl = total;
+    else if (probe.status === 200 && probeCl != null) cl = probeCl;
+    if (cl != null) headers.set("Content-Length", String(cl));
+    const status = resp.status === 405 && (probe.status === 200 || probe.status === 206) ? 200 : resp.status;
+    return headReply(status, headers);
+  }
+
+  if (cl != null) headers.set("Content-Length", String(cl));
+  return headReply(resp.status, headers);
+}
+
 /** GET/HEAD proxy: optional caches.default, optional Range stitch, client Range. */
 export async function proxy(ctx: Ctx, opts: ProxyOpts): Promise<Response> {
   const method = ctx.request.method.toUpperCase();
@@ -74,26 +133,7 @@ export async function proxy(ctx: Ctx, opts: ProxyOpts): Promise<Response> {
   const mode = opts.cacheMode ?? "none";
 
   if (method === "HEAD") {
-    if (mode === "immutable" && opts.cacheKey) {
-      const hit = await matchSafe(ctx, opts.cacheKey);
-      if (hit) {
-        const headers = new Headers(hit.headers);
-        headers.set("X-Proxyhub-Cache", "HIT");
-        if (opts.extraOut) for (const [k, v] of Object.entries(opts.extraOut)) headers.set(k, v);
-        if (hit.body) await hit.body.cancel();
-        return new Response(null, { status: 200, headers });
-      }
-    }
-    const resp = await fetchFollow(ctx.runtime.fetch, opts.url, {
-      method: "HEAD",
-      headers: opts.headers,
-      signal: ctx.request.signal,
-    });
-    const headers = copyUpstreamHeaders(resp.headers, opts.extraOut, { keepEncoding: true });
-    const cl = resp.headers.get("Content-Length");
-    if (cl) headers.set("Content-Length", cl);
-    if (resp.body) await resp.body.cancel();
-    return new Response(null, { status: resp.status, headers });
+    return headProxy(ctx, opts, mode);
   }
 
   if (method !== "GET") {
@@ -135,15 +175,16 @@ export async function proxy(ctx: Ctx, opts: ProxyOpts): Promise<Response> {
       url: opts.url,
       headers: opts.headers,
       chunkSize: ctx.runtime.rangeChunk || RANGE_CHUNK,
-      clientStart: clientRange?.start,
-      clientEnd: clientRange?.end,
+      clientStart: clientRange ? clientRange.start : undefined,
+      clientEnd: clientRange ? clientRange.end : undefined,
       reauth: opts.reauth,
       signal: ctx.request.signal,
     });
     if (opts.extraOut) {
       for (const [k, v] of Object.entries(opts.extraOut)) result.headers.set(k, v);
     }
-    const resp = new Response(result.body, { status: result.status, headers: result.headers });
+    const length = contentLength(result.headers);
+    const resp = responseWithKnownLength(result.status, result.headers, result.body, length);
     if (mode === "immutable" && opts.cacheKey && !clientRange) {
       return putIfSmall(ctx, opts.cacheKey, resp);
     }
@@ -158,7 +199,7 @@ export async function proxy(ctx: Ctx, opts: ProxyOpts): Promise<Response> {
       headers: h,
       signal: ctx.request.signal,
     });
-    return finish(resp, opts.extraOut);
+    return constrainResponseToRange(resp, clientRange, opts.extraOut);
   }
 
   const resp = await fetchFollow(ctx.runtime.fetch, opts.url, {

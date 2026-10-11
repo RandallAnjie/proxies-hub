@@ -108,4 +108,47 @@ describe("docker bearer dance", () => {
     assert.equal(r.headers.get("Docker-Content-Digest"), digest);
     assert.equal(await r.text(), "ABCDEFGH");
   });
+
+  it("HEAD on a blob reports Content-Length from a range probe", async () => {
+    resetDockerAuth();
+    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.startsWith("https://registry-1.docker.io/") && !headers.get("Authorization")) {
+        return new Response(null, {
+          status: 401,
+          headers: {
+            "WWW-Authenticate": 'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"',
+          },
+        });
+      }
+      if (url.startsWith("https://auth.docker.io/token")) {
+        return Response.json({ token: "tok-head" });
+      }
+      if (url.includes("/blobs/sha256:")) {
+        if (method === "HEAD") {
+          return new Response(null, {
+            status: 200,
+            headers: { "Content-Type": "application/octet-stream" },
+          });
+        }
+        assert.equal(headers.get("Range"), "bytes=0-0");
+        return new Response("A", {
+          status: 206,
+          headers: { "Content-Range": "bytes 0-0/8", "Content-Length": "1" },
+        });
+      }
+      return new Response(`unexpected ${url}`, { status: 599 });
+    };
+    const handle = createHandler({ fetch: fetchFn, cache: new MemoryCache() });
+    const digest = "sha256:" + "cd".repeat(32);
+    const r = await handle(
+      new Request(`https://ph.test/v2/hub/library/alpine/blobs/${digest}`, { method: "HEAD" }),
+    );
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("Content-Length"), "8");
+    assert.equal(r.headers.get("Docker-Content-Digest"), digest);
+    assert.equal(await r.text(), "");
+  });
 });

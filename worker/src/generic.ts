@@ -13,8 +13,9 @@ export async function handleGeneric(ctx: Ctx, path: string): Promise<Response> {
   const rest = m[3] || "/";
   const url = new URL(`${scheme}://${host}${rest}`);
   new URL(ctx.request.url).searchParams.forEach((v, k) => url.searchParams.append(k, v));
+  const method = ctx.request.method.toUpperCase();
   const cacheable =
-    ctx.request.method.toUpperCase() === "GET" &&
+    (method === "GET" || method === "HEAD") &&
     !rest.endsWith("/") &&
     !rest.endsWith(".html") &&
     !rest.endsWith("index.yaml");

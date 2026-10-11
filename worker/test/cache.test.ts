@@ -249,6 +249,78 @@ describe("throwing Cache API is best-effort", () => {
     assert.equal(await r.text(), slice);
   });
 
+  it("trims a small npm tarball Range to exactly 0-1023", async () => {
+    const total = 3619;
+    const payload = "N".repeat(total);
+    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      assert.match(url, /registry\.npmjs\.org\/left-pad\/-\/left-pad-1\.3\.0\.tgz/);
+      const range = new Headers(init?.headers).get("Range") || "";
+      const m = /^bytes=(\d+)-(\d+)$/.exec(range);
+      assert.ok(m, `expected a closed Range, got ${range}`);
+      const start = Number(m[1]);
+      const end = Math.min(Number(m[2]), total - 1);
+      const slice = payload.slice(start, end + 1);
+      return new Response(slice, {
+        status: 206,
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": String(slice.length),
+          "Content-Range": `bytes ${start}-${end}/${total}`,
+        },
+      });
+    };
+    const handle = createHandler({
+      fetch: fetchFn,
+      cache: new ThrowingCache(),
+      rangeChunk: 128 * 1024 * 1024,
+    });
+    const r = await handle(
+      new Request("https://ph.test/npm/left-pad/-/left-pad-1.3.0.tgz", {
+        headers: { Range: "bytes=0-1023" },
+      }),
+    );
+    assert.equal(r.status, 206);
+    assert.equal(r.headers.get("Content-Length"), "1024");
+    assert.equal(r.headers.get("Content-Range"), `bytes 0-1023/${total}`);
+    const body = await r.text();
+    assert.equal(body.length, 1024);
+    assert.equal(body, payload.slice(0, 1024));
+  });
+
+  it("HEAD on a torch wheel reports Content-Length after a size probe", async () => {
+    const total = 174642530;
+    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      const range = new Headers(init?.headers).get("Range");
+      assert.match(url, /download\.pytorch\.org\/whl\/cpu\/torch-2\.5\.1(?:\+|%2B)cpu-cp312-cp312-linux_x86_64\.whl/);
+      if (method === "HEAD") {
+        return new Response(null, {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+      }
+      assert.equal(range, "bytes=0-0");
+      return new Response("x", {
+        status: 206,
+        headers: {
+          "Content-Range": `bytes 0-0/${total}`,
+          "Content-Length": "1",
+        },
+      });
+    };
+    const handle = createHandler({ fetch: fetchFn, cache: new ThrowingCache() });
+    const r = await handle(
+      new Request("https://ph.test/torch/whl/cpu/torch-2.5.1%2Bcpu-cp312-cp312-linux_x86_64.whl", {
+        method: "HEAD",
+      }),
+    );
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("Content-Length"), String(total));
+    assert.equal(await r.text(), "");
+  });
+
   it("HEAD on an immutable object falls through to upstream", async () => {
     const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {
       const method = (init?.method || "GET").toUpperCase();

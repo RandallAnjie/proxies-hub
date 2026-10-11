@@ -1,5 +1,5 @@
 import { MAX_CACHE_BYTES } from "./config";
-import { contentLength } from "./headers";
+import { contentLength, resolveByteRange, type ClientRange } from "./headers";
 import type { Ctx } from "./types";
 
 export type CacheMode = "none" | "immutable" | "revalidate";
@@ -119,22 +119,23 @@ export async function cachedGet(
 
 export async function serveCachedRange(
   cached: Response,
-  start: number,
+  start: number | null,
   end: number | null,
 ): Promise<Response> {
   const buf = await cached.arrayBuffer();
   const total = buf.byteLength;
-  const last = end == null ? total - 1 : Math.min(end, total - 1);
-  if (start < 0 || start > last) {
+  const range: ClientRange = { start, end };
+  const resolved = resolveByteRange(range, total);
+  if (!resolved) {
     return new Response(null, {
       status: 416,
       headers: { "Content-Range": `bytes */${total}`, "X-Proxyhub": "1" },
     });
   }
-  const slice = buf.slice(start, last + 1);
+  const slice = buf.slice(resolved.start, resolved.last + 1);
   const headers = new Headers(cached.headers);
   headers.set("Content-Length", String(slice.byteLength));
-  headers.set("Content-Range", `bytes ${start}-${last}/${total}`);
+  headers.set("Content-Range", `bytes ${resolved.start}-${resolved.last}/${total}`);
   headers.set("Accept-Ranges", "bytes");
   headers.set("X-Proxyhub-Cache", "HIT");
   headers.set("X-Proxyhub", "1");
