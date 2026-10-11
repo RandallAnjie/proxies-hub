@@ -173,7 +173,14 @@ export async function handleDocker(ctx: Ctx, registry: string, path: string): Pr
       return out;
     };
     if (method === "HEAD") {
-      return proxy(ctx, { url, headers, extraOut: extra });
+      return proxy(ctx, {
+        url,
+        headers,
+        cacheKey: key,
+        cacheMode: "immutable",
+        ranged: true,
+        extraOut: extra,
+      });
     }
     if (method === "GET") {
       return proxy(ctx, {

@@ -40,22 +40,62 @@ export function copyUpstreamHeaders(
   return out;
 }
 
-export function parseRange(
-  header: string | null,
-): { start: number; end: number | null } | null {
+/** Single `bytes=` range. `start === null` is a suffix (`bytes=-N`). */
+export type ClientRange = {
+  start: number | null;
+  end: number | null;
+};
+
+export function parseRange(header: string | null): ClientRange | null {
   if (!header || !header.startsWith("bytes=") || header.includes(",")) return null;
   const spec = header.slice(6);
   const dash = spec.indexOf("-");
   if (dash === -1) return null;
   const a = spec.slice(0, dash);
   const b = spec.slice(dash + 1);
-  if (a === "") return null;
+  if (a === "") {
+    if (!b) return null;
+    const suffix = Number(b);
+    if (!Number.isFinite(suffix) || suffix < 0) return null;
+    return { start: null, end: suffix };
+  }
   const start = Number(a);
   if (!Number.isFinite(start) || start < 0) return null;
   if (!b) return { start, end: null };
   const end = Number(b);
   if (!Number.isFinite(end) || end < start) return null;
   return { start, end };
+}
+
+/** Inclusive `[start, last]` against `total`, or null if the range is unsatisfiable. */
+export function resolveByteRange(
+  range: ClientRange,
+  total: number,
+): { start: number; last: number } | null {
+  if (!Number.isFinite(total) || total <= 0) return null;
+  if (range.start == null) {
+    const suffix = range.end;
+    if (suffix == null || suffix <= 0) return null;
+    return { start: Math.max(0, total - suffix), last: total - 1 };
+  }
+  if (range.start >= total) return null;
+  const last = range.end == null ? total - 1 : Math.min(range.end, total - 1);
+  if (range.start > last) return null;
+  return { start: range.start, last };
+}
+
+export function parseContentRange(
+  header: string | null,
+): { start: number; end: number; total: number } | null {
+  if (!header) return null;
+  const m = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(header.trim());
+  if (!m) return null;
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  const total = m[3] === "*" ? -1 : Number(m[3]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) return null;
+  if (m[3] !== "*" && (!Number.isFinite(total) || total < 0)) return null;
+  return { start, end, total };
 }
 
 export function text(status: number, body: string, extra?: Record<string, string>): Response {
