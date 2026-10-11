@@ -7,3 +7,5 @@ dist/
 build/
 cache/
 *.log
+node_modules/
+.wrangler/

@@ -1,0 +1,18 @@
+{
+  "name": "proxies-hub-worker",
+  "private": true,
+  "type": "module",
+  "description": "RandallFlare / workerd port of the proxyhub all-in-one entrypoint",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/build.mjs --test && node scripts/run-tests.mjs",
+    "test:integration": "node scripts/build.mjs --test --integration && node scripts/run-tests.mjs --integration",
+    "start": "npm run build && node scripts/serve.mjs",
+    "dev": "npx --yes wrangler@4 dev --config wrangler.toml"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10",
+    "typescript": "^5.9.3"
+  }
+}
