@@ -40,7 +40,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests
-        run: npm test
+        run: node scripts/build.mjs --test && node scripts/run-tests.mjs
+      - name: workerd integration
+        run: npm run test:workerd
       - name: Build bundle
         run: npm run build
 

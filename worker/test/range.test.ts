@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { serveCachedRange } from "../src/cache";
-import { parseRange, resolveByteRange } from "../src/headers";
-import { constrainResponseToRange, rangedFetch } from "../src/range";
+import { contentLength, parseRange, resolveByteRange } from "../src/headers";
+import { createHandler, MemoryCache } from "../src/index";
+import { constrainResponseToRange, asFixedLength, rangedFetch, responseWithKnownLength } from "../src/range";
 
 type Step = {
   status: number;
@@ -170,6 +171,18 @@ function objectFetch(payload: string) {
 async function bodyOf(result: { body: ReadableStream<Uint8Array> | null }): Promise<string> {
   return new Response(result.body).text();
 }
+
+describe("contentLength", () => {
+  it("reads a length that Headers.get hides (workerd fetch)", () => {
+    const h = new Headers({ "Content-Type": "text/plain", "Content-Length": "4" });
+    const orig = h.get.bind(h);
+    h.get = (name: string) => {
+      if (String(name).toLowerCase() === "content-length") return null;
+      return orig(name);
+    };
+    assert.equal(contentLength(h), 4);
+  });
+});
 
 describe("parseRange", () => {
   it("parses closed, open-ended, and suffix forms", () => {
@@ -362,8 +375,9 @@ describe("rangedFetch honours the exact client window", () => {
       assert.equal(result.status, 200);
       assert.ok(result.headers.get("Content-Length"), "Content-Length must be present");
       assert.equal(result.headers.get("Content-Length"), "20");
+      const resp = responseWithKnownLength(result.status, result.headers, result.body, 20);
       assert.ok(lengths.includes(20), "FixedLengthStream should be constructed with the object size");
-      assert.equal(await bodyOf(result), small);
+      assert.equal(await resp.text(), small);
     } finally {
       if (prev !== undefined) g.FixedLengthStream = prev;
       else delete g.FixedLengthStream;
@@ -420,5 +434,262 @@ describe("small/direct and cached range paths", () => {
     const miss = await serveCachedRange(cached(), 40, 50);
     assert.equal(miss.status, 416);
     assert.equal(miss.headers.get("Content-Range"), "bytes */10");
+  });
+});
+
+function installFakeFixedLength(kind: "identity" | "boom" | "throw") {
+  const lengths: number[] = [];
+  const g = globalThis as typeof globalThis & { FixedLengthStream?: unknown };
+  const prev = g.FixedLengthStream;
+  if (kind === "throw") {
+    g.FixedLengthStream = class {
+      constructor() {
+        throw new Error("FixedLengthStream unavailable");
+      }
+    };
+    return {
+      lengths,
+      restore() {
+        if (prev !== undefined) g.FixedLengthStream = prev;
+        else delete g.FixedLengthStream;
+      },
+    };
+  }
+  if (kind === "boom") {
+    g.FixedLengthStream = class {
+      readable: ReadableStream<Uint8Array>;
+      writable: WritableStream<Uint8Array>;
+      constructor(n: number) {
+        lengths.push(n);
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        this.readable = new ReadableStream<Uint8Array>({
+          start(c) {
+            controller = c;
+          },
+        });
+        this.writable = new WritableStream<Uint8Array>({
+          write() {
+            const err = new Error("pipe exploded");
+            try {
+              controller.error(err);
+            } catch {
+              /* already errored */
+            }
+            throw err;
+          },
+          abort(reason) {
+            try {
+              controller.error(reason);
+            } catch {
+              /* already errored */
+            }
+          },
+          close() {
+            try {
+              controller.close();
+            } catch {
+              /* already closed */
+            }
+          },
+        });
+      }
+    };
+    return {
+      lengths,
+      restore() {
+        if (prev !== undefined) g.FixedLengthStream = prev;
+        else delete g.FixedLengthStream;
+      },
+    };
+  }
+  g.FixedLengthStream = class {
+    readable: ReadableStream<Uint8Array>;
+    writable: WritableStream<Uint8Array>;
+    constructor(n: number) {
+      lengths.push(n);
+      const t = new TransformStream<Uint8Array, Uint8Array>();
+      this.readable = t.readable;
+      this.writable = t.writable;
+    }
+  };
+  return {
+    lengths,
+    restore() {
+      if (prev !== undefined) g.FixedLengthStream = prev;
+      else delete g.FixedLengthStream;
+    },
+  };
+}
+
+function bytesOf(text: string): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(c) {
+      c.enqueue(new TextEncoder().encode(text));
+      c.close();
+    },
+  });
+}
+
+describe("asFixedLength wrap-once and errors", () => {
+  it("wraps at most once and does not call pipeTo", async () => {
+    const fake = installFakeFixedLength("identity");
+    try {
+      const src = bytesOf("0123456789ABCDEFGHIJ");
+      let piped = false;
+      const orig = src.pipeTo.bind(src);
+      src.pipeTo = ((...args: Parameters<ReadableStream<Uint8Array>["pipeTo"]>) => {
+        piped = true;
+        return orig(...args);
+      }) as ReadableStream<Uint8Array>["pipeTo"];
+      const once = asFixedLength(src, 20);
+      const twice = asFixedLength(once, 20);
+      assert.equal(twice, once);
+      assert.equal(fake.lengths.length, 1);
+      assert.equal(fake.lengths[0], 20);
+      assert.equal(piped, false, "workerd cannot pipeTo between transform streams");
+      assert.equal(await new Response(twice).text(), "0123456789ABCDEFGHIJ");
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("errors the readable when the pump fails instead of hanging at 0 bytes", async () => {
+    const fake = installFakeFixedLength("boom");
+    try {
+      const out = asFixedLength(bytesOf("abc"), 3);
+      await assert.rejects(
+        () =>
+          Promise.race([
+            new Response(out).arrayBuffer(),
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error("hung: readable never errored")), 2000);
+            }),
+          ]),
+        /pipe exploded/,
+      );
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("returns the original body when FixedLengthStream throws", async () => {
+    const fake = installFakeFixedLength("throw");
+    try {
+      const src = bytesOf("x");
+      assert.equal(asFixedLength(src, 1), src);
+      assert.equal(await new Response(src).text(), "x");
+    } finally {
+      fake.restore();
+    }
+  });
+});
+
+describe("handler wraps known-length bodies at most once", () => {
+  it("ranged GET and Range construct FixedLengthStream once and deliver bytes", async () => {
+    const payload = "L".repeat(2048);
+    const fake = installFakeFixedLength("identity");
+    try {
+      const handle = createHandler({
+        fetch: objectFetch(payload).fetchFn,
+        cache: new MemoryCache(),
+        rangeChunk: 512,
+      });
+      const full = await handle(new Request("https://ph.test/cache/https/files.example/pkg.bin"));
+      assert.equal(full.status, 200);
+      assert.equal(full.headers.get("Content-Length"), "2048");
+      assert.equal(await full.text(), payload);
+      assert.equal(fake.lengths.length, 1, "ranged 200 must wrap at most once");
+
+      // Distinct URL so this is a rangedFetch miss, not serveCachedRange.
+      const ranged = await handle(
+        new Request("https://ph.test/cache/https/files.example/other.bin", {
+          headers: { Range: "bytes=0-1023" },
+        }),
+      );
+      assert.equal(ranged.status, 206);
+      assert.equal(ranged.headers.get("Content-Length"), "1024");
+      assert.equal(ranged.headers.get("Content-Range"), "bytes 0-1023/2048");
+      assert.equal(await ranged.text(), payload.slice(0, 1024));
+      assert.equal(fake.lengths.length, 2, "each response wraps at most once");
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("rewritten npm packument (applyExtra) wraps once and keeps the body", async () => {
+    const packument = JSON.stringify({
+      name: "left-pad",
+      versions: {
+        "1.3.0": { dist: { tarball: "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz" } },
+      },
+    });
+    const fake = installFakeFixedLength("identity");
+    try {
+      const handle = createHandler({
+        fetch: async () =>
+          new Response(packument, {
+            status: 200,
+            headers: { "Content-Type": "application/json", "Content-Length": String(packument.length) },
+          }),
+        cache: new MemoryCache(),
+      });
+      const resp = await handle(new Request("https://ph.test/npm/left-pad"));
+      assert.equal(resp.status, 200);
+      const body = await resp.text();
+      assert.match(body, /https:\/\/ph\.test\/npm\/left-pad\/-\/left-pad-1\.3\.0\.tgz/);
+      assert.doesNotMatch(body, /registry\.npmjs\.org/);
+      assert.equal(resp.headers.get("Content-Length"), String(new TextEncoder().encode(body).byteLength));
+      assert.equal(fake.lengths.length, 1);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("small/direct .html GET and Range wrap once", async () => {
+    const html = "<!doctype html><p>0123456789ABCDEF</p>";
+    const fake = installFakeFixedLength("identity");
+    try {
+      const handle = createHandler({
+        fetch: async () =>
+          new Response(html, {
+            status: 200,
+            headers: { "Content-Type": "text/html", "Content-Length": String(html.length) },
+          }),
+        cache: new MemoryCache(),
+      });
+      const full = await handle(new Request("https://ph.test/cache/https/files.example/page.html"));
+      assert.equal(full.status, 200);
+      assert.equal(full.headers.get("Content-Length"), String(html.length));
+      assert.equal(await full.text(), html);
+      assert.equal(fake.lengths.length, 1);
+
+      const ranged = await handle(
+        new Request("https://ph.test/cache/https/files.example/page.html", {
+          headers: { Range: "bytes=0-9" },
+        }),
+      );
+      assert.equal(ranged.status, 206);
+      assert.equal(ranged.headers.get("Content-Length"), "10");
+      assert.equal(await ranged.text(), html.slice(0, 10));
+      assert.equal(fake.lengths.length, 2);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("HEAD keeps Content-Length and has no body", async () => {
+    const payload = "0123456789";
+    const handle = createHandler({
+      fetch: async () =>
+        new Response(payload, {
+          status: 200,
+          headers: { "Content-Type": "text/plain", "Content-Length": "10" },
+        }),
+      cache: new MemoryCache(),
+    });
+    const head = await handle(new Request("https://ph.test/cache/https/files.example/pkg.bin", { method: "HEAD" }));
+    assert.equal(head.status, 200);
+    assert.equal(head.headers.get("Content-Length"), "10");
+    assert.equal(head.body, null);
   });
 });
