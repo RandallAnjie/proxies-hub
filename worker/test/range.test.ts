@@ -457,13 +457,27 @@ function installFakeFixedLength(kind: "identity" | "boom" | "throw") {
         });
         this.writable = new WritableStream<Uint8Array>({
           write() {
-            throw new Error("pipe exploded");
+            const err = new Error("pipe exploded");
+            try {
+              controller.error(err);
+            } catch {
+              /* already errored */
+            }
+            throw err;
           },
           abort(reason) {
-            controller.error(reason);
+            try {
+              controller.error(reason);
+            } catch {
+              /* already errored */
+            }
           },
           close() {
-            controller.close();
+            try {
+              controller.close();
+            } catch {
+              /* already closed */
+            }
           },
         });
       }
@@ -574,8 +588,9 @@ describe("handler wraps known-length bodies at most once", () => {
       assert.equal(await full.text(), payload);
       assert.equal(fake.lengths.length, 1, "ranged 200 must wrap at most once");
 
+      // Distinct URL so this is a rangedFetch miss, not serveCachedRange.
       const ranged = await handle(
-        new Request("https://ph.test/cache/https/files.example/pkg.bin", {
+        new Request("https://ph.test/cache/https/files.example/other.bin", {
           headers: { Range: "bytes=0-1023" },
         }),
       );
