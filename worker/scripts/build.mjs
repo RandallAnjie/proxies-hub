@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,9 @@ await esbuild.build({
 
 if (withTests) {
   const testDir = join(root, "test");
+  if (!withIntegration) {
+    await rm(join(root, "dist/test/integration.test.js"), { force: true });
+  }
   const files = (await readdir(testDir)).filter((f) => {
     if (!f.endsWith(".test.ts")) return false;
     if (!withIntegration && f === "integration.test.ts") return false;

@@ -161,6 +161,10 @@ describe("integration (live upstreams)", { timeout: 180000 }, () => {
     assert.doesNotMatch(html, /files\.pythonhosted\.org/);
 
     const srv = await startServer((req) => handle(req));
+    const viaHttp = await fetch(`${srv.url}/pypi/index/pip/`);
+    assert.equal(viaHttp.status, 200);
+    assert.equal(viaHttp.headers.get("content-encoding"), null);
+    assert.match(await viaHttp.text(), /href=/);
     const dir = await mkdtemp(join(tmpdir(), "ph-pip-"));
     try {
       const { code, out } = await run(

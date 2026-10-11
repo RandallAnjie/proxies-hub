@@ -1,5 +1,5 @@
 import { cachedGet } from "./cache";
-import { copyUpstreamHeaders, joinHeader } from "./headers";
+import { bufferedHeaders, joinHeader } from "./headers";
 import { proxy } from "./proxy";
 import { rewritePypiIndex } from "./rewrite";
 import type { Ctx } from "./types";
@@ -42,7 +42,11 @@ export async function handlePypi(ctx: Ctx, path: string, prefix: string): Promis
     () =>
       fetchFollow(ctx.runtime.fetch, url, {
         method: "GET",
-        headers: { Accept: accept, "User-Agent": "proxyhub-pypi" },
+        headers: {
+          Accept: accept,
+          "User-Agent": "proxyhub-pypi",
+          "Accept-Encoding": "identity",
+        },
         signal: ctx.request.signal,
       }),
     "revalidate",
@@ -51,7 +55,7 @@ export async function handlePypi(ctx: Ctx, path: string, prefix: string): Promis
         const ctype = resp.headers.get("Content-Type") || "text/html";
         const body = await resp.text();
         const rewritten = rewritePypiIndex(body, filesBase);
-        const headers = copyUpstreamHeaders(resp.headers);
+        const headers = bufferedHeaders(resp.headers);
         headers.set("Content-Type", ctype);
         headers.set("Content-Length", String(new TextEncoder().encode(rewritten).byteLength));
         return new Response(rewritten, { status: resp.status, headers });

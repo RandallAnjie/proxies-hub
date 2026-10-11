@@ -6,8 +6,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/build.mjs --test && node --test dist/test/*.test.js",
-    "test:integration": "node scripts/build.mjs --test --integration && node --test dist/test/integration.test.js",
+    "test": "node scripts/build.mjs --test && node scripts/run-tests.mjs",
+    "test:integration": "node scripts/build.mjs --test --integration && node scripts/run-tests.mjs --integration",
     "start": "npm run build && node scripts/serve.mjs",
     "dev": "npx --yes wrangler@4 dev --config wrangler.toml"
   },

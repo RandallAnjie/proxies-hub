@@ -67,6 +67,14 @@ export function text(status: number, body: string, extra?: Record<string, string
   return new Response(body, { status, headers });
 }
 
+/** Headers for a body we already decoded / rewrote (never keep Content-Encoding). */
+export function bufferedHeaders(src: Headers, extra?: Record<string, string>): Headers {
+  const out = copyUpstreamHeaders(src, extra);
+  out.delete("Content-Encoding");
+  out.delete("Content-Length");
+  return out;
+}
+
 export function withProxyhub(resp: Response, extra?: Record<string, string>): Response {
   const headers = new Headers(resp.headers);
   headers.set("X-Proxyhub", "1");

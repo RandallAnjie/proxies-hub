@@ -51,14 +51,22 @@ describe("handler rewrites", () => {
     const fetchFn = async (input: RequestInfo | URL) => {
       const url = String(input);
       assert.match(url, /pypi\.org\/simple\/requests\//);
-      return new Response(
+        return new Response(
         '<a href="https://files.pythonhosted.org/packages/aa/requests-2.0.tar.gz#sha256=abc">requests</a>',
-        { status: 200, headers: { "Content-Type": "text/html", "Content-Length": "120" } },
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html",
+            "Content-Length": "120",
+            "Content-Encoding": "gzip",
+          },
+        },
       );
     };
     const handle = createHandler({ fetch: fetchFn, cache: new MemoryCache() });
     const r = await handle(new Request("https://ph.test/pypi/index/requests/"));
     assert.equal(r.status, 200);
+    assert.equal(r.headers.get("Content-Encoding"), null);
     const body = await r.text();
     assert.match(body, /https:\/\/ph\.test\/pypi\/files\/packages\/aa\/requests-2.0\.tar\.gz/);
     assert.doesNotMatch(body, /files\.pythonhosted\.org/);

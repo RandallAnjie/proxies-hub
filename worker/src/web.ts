@@ -31,6 +31,7 @@ export async function handleWeb(ctx: Ctx, name: string, path: string, prefix: st
   });
   const accept = ctx.request.headers.get("Accept");
   if (accept) headers.set("Accept", accept);
+  if (mirror.rewriteOrigin) headers.set("Accept-Encoding", "identity");
 
   const r = rules(name, mirror);
   const revalidatable = r.revalidate.some((re) => re.test(pathname));
@@ -53,6 +54,7 @@ export async function handleWeb(ctx: Ctx, name: string, path: string, prefix: st
           `${ctx.origin}${prefix}/`,
         );
         const headers2 = new Headers(resp.headers);
+        headers2.delete("Content-Encoding");
         headers2.set("X-Proxyhub", "1");
         headers2.set("Content-Length", String(new TextEncoder().encode(rewritten).byteLength));
         return new Response(rewritten, { status: resp.status, headers: headers2 });
