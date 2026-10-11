@@ -144,6 +144,41 @@ describe("integration (live upstreams)", { timeout: 180000 }, () => {
     assert.ok(blob.headers.get("Content-Length"));
   });
 
+  it("anonymous /r/ghcr.io pull of a public manifest", async (t) => {
+    if (!(await live("https://ghcr.io/v2/"))) {
+      t.skip("ghcr.io unreachable");
+      return;
+    }
+    const handle = createHandler({ cache: new MemoryCache() });
+    const r = await handle(
+      new Request("https://ph.test/v2/r/ghcr.io/jqlang/jq/manifests/latest", {
+        headers: { Accept: ACCEPT },
+      }),
+    );
+    assert.equal(r.status, 200, await r.clone().text());
+    const ctype = r.headers.get("Content-Type") || "";
+    assert.ok(ctype.includes("json") || ctype.includes("prettyjws"), ctype);
+    const doc = (await r.json()) as { schemaVersion?: number; manifests?: unknown[]; config?: unknown };
+    assert.ok(doc.schemaVersion || doc.manifests || doc.config);
+  });
+
+  it("release.cloudreve.org via /r/ returns a Basic challenge without credentials", async (t) => {
+    if (!(await live("https://release.cloudreve.org/v2/"))) {
+      t.skip("release.cloudreve.org unreachable");
+      return;
+    }
+    const handle = createHandler({ cache: new MemoryCache() });
+    const r = await handle(
+      new Request("https://ph.test/v2/r/release.cloudreve.org/cloudreve/pro/manifests/latest", {
+        headers: { Accept: ACCEPT },
+      }),
+    );
+    assert.equal(r.status, 401, await r.clone().text());
+    const www = r.headers.get("WWW-Authenticate") || "";
+    assert.match(www, /^Basic realm="https:\/\/ph\.test\/v2\/"$/);
+    assert.equal(r.headers.get("Docker-Distribution-Api-Version"), "registry/2.0");
+  });
+
   it("pypi simple index rewrite + pip download", async (t) => {
     if (!(await live("https://pypi.org/simple/pip/"))) {
       t.skip("pypi.org unreachable");

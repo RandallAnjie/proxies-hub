@@ -5,7 +5,7 @@ export function docsMarkdown(host: string): string {
   const regs = publicDockerRegistries().join(", ");
   return `# proxyhub — all-in-one
 
-Single host, path-dispatched. Private / credentialed docker sources are not exposed.
+Single host, path-dispatched. Credentials are never stored on this host.
 
 ## Docker / OCI
 
@@ -13,11 +13,27 @@ Single host, path-dispatched. Private / credentialed docker sources are not expo
 docker pull ${h}/hub/library/nginx
 docker pull ${h}/ghcr/<owner>/<image>
 ollama pull ${h}/ollama/library/llama3
+
+# any third-party registry (multi-level repos and digests work)
+docker pull ${h}/r/ghcr.io/<owner>/<image>
+docker pull ${h}/r/release.cloudreve.org/cloudreve/pro:latest
+
+# private / credentialed — docker login, then pull. Nothing is stored here.
+docker login ${h}
+docker pull ${h}/r/<registry-host>/<repo>:<tag>
+# the same login works for a private image on a fixed prefix:
+docker pull ${h}/ghcr/<owner>/<private-image>
 \`\`\`
 
 Public registries: ${regs}
 
 Path form: \`/v2/<registry>/<repo>/...\`  (docker puts \`<registry>\` after \`/v2/\`).
+
+Generic form: \`/v2/r/<registry-host>[:port]/<repo>/...\` → \`https://<registry-host>/v2/<repo>/...\`.
+
+Docker stores **one credential per registry host**. Login to \`${h}\` is shared by every \`/v2/...\` and \`/v2/r/...\` pull through this hostname.
+
+Authenticated requests (a client \`Authorization\` header, or a token obtained with those credentials) are **never cached**, including blobs. Anonymous public content keeps the usual digest/tag cache rules.
 
 ## GitHub
 
@@ -85,8 +101,8 @@ export function docsHtml(host: string): string {
     {
       no: "01",
       title: "Docker / OCI",
-      hint: "public only",
-      code: `docker pull ${host}/hub/library/nginx\ndocker pull ${host}/ghcr/<owner>/<image>\nollama pull ${host}/ollama/library/llama3`,
+      hint: "/v2/<reg> · /v2/r/…",
+      code: `docker pull ${host}/hub/library/nginx\ndocker pull ${host}/ghcr/<owner>/<image>\ndocker pull ${host}/r/ghcr.io/<owner>/<image>\ndocker login ${host}\ndocker pull ${host}/r/<registry-host>/<repo>:<tag>`,
     },
     {
       no: "02",
@@ -183,7 +199,7 @@ export function docsHtml(host: string): string {
     </div>
     <button class="toggle" id="t" title="Toggle theme" aria-label="Toggle theme">◐</button>
   </header>
-  <p class="lead">One hostname, no per-service subdomains. Docker uses <code>/v2/&lt;registry&gt;/…</code>; everything else is <code>/&lt;service&gt;/…</code>. Private docker sources are not exposed. Markdown version: <a class="dom" href="/docs">curl /docs</a>.</p>
+  <p class="lead">One hostname, no per-service subdomains. Docker uses <code>/v2/&lt;registry&gt;/…</code> or <code>/v2/r/&lt;registry-host&gt;/…</code> (login credentials pass through; nothing is stored). Everything else is <code>/&lt;service&gt;/…</code>. Markdown version: <a class="dom" href="/docs">curl /docs</a>.</p>
   ${body}
   <footer>
     <span><a class="dom" href="https://github.com/RandallAnjie/proxies-hub" target="_blank" rel="noopener">github.com/RandallAnjie/proxies-hub</a></span>

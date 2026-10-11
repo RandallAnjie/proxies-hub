@@ -1,7 +1,7 @@
 import { handleApt } from "./apt";
 import { config, MAX_CACHE_BYTES, RANGE_CHUNK } from "./config";
 import { handleCrates } from "./crates";
-import { dockerPing, handleDocker } from "./docker";
+import { dockerPing, handleDocker, handleDockerToken, handleGenericDocker } from "./docker";
 import { docsHtml, docsMarkdown, isMarkdownUa } from "./docs";
 import { handleGeneric } from "./generic";
 import { handleGithub } from "./github";
@@ -105,6 +105,12 @@ async function dispatch(ctx: Ctx): Promise<Response> {
   if (route.kind === "docker") {
     return handleDocker(ctx, route.registry, route.path);
   }
+  if (route.kind === "docker-generic") {
+    return handleGenericDocker(ctx, route.registryHost, route.path);
+  }
+  if (route.kind === "docker-token") {
+    return handleDockerToken(ctx, route.target);
+  }
 
   switch (route.service) {
     case "github":
@@ -145,4 +151,14 @@ export { rangedFetch } from "./range";
 export { rewriteCratesConfig, rewriteNpmRegistry, rewritePypiIndex } from "./rewrite";
 export { resolveGithubAuth } from "./github";
 export { resetDockerAuth } from "./docker";
+export {
+  hostAllowed,
+  parseRegistryHost,
+  resolveRegistryHost,
+} from "./registry-host";
+export {
+  rewriteChallengeForClient,
+  rewriteScopeFromClient,
+  rewriteScopeToClient,
+} from "./docker";
 export { MemoryCache } from "./memory-cache";

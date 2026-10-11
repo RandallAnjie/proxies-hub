@@ -1,5 +1,9 @@
 export type Env = {
   GITHUB_PAT?: string;
+  /** Comma-separated hosts or `*.` wildcards. Unset = any public host. */
+  GENERIC_REGISTRY_ALLOWLIST?: string;
+  /** Exact `host[:port]` entries allowed over http (local tests / LAN). */
+  GENERIC_REGISTRY_HTTP_ORIGINS?: string;
   [key: string]: string | undefined;
 };
 

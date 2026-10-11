@@ -11,7 +11,7 @@ type Meta = {
 };
 
 const GROUPS: { id: GroupId; no: string; title: string; hint: string }[] = [
-  { id: "docker", no: "01", title: "Docker / OCI", hint: "public only" },
+  { id: "docker", no: "01", title: "Docker / OCI", hint: "/v2/<reg> · /v2/r/…" },
   { id: "index", no: "02", title: "语言与包索引", hint: "/<service>/…" },
   { id: "sys", no: "03", title: "Git · 系统 · 缓存", hint: "host-in-path" },
 ];
@@ -27,6 +27,12 @@ const META: Record<string, Meta> = {
   elastic: { title: "Elastic", blurb: "Elastic 镜像", group: "docker", keys: "docker elastic" },
   nvcr: { title: "NGC", blurb: "NVIDIA", group: "docker", keys: "docker nvidia nvcr" },
   ollama: { title: "Ollama", blurb: "本地模型", group: "docker", keys: "ollama llama llm" },
+  r: {
+    title: "任意仓库",
+    blurb: "登录透传",
+    group: "docker",
+    keys: "docker generic registry r private login harbor gitlab cloudreve",
+  },
   npm: { title: "npm", blurb: "Node 包", group: "index", keys: "npm node javascript" },
   pypi: { title: "PyPI", blurb: "pip / uv", group: "index", keys: "pip uv python pypi" },
   conda: { title: "Conda", blurb: "频道别名", group: "index", keys: "conda anaconda" },
@@ -77,6 +83,11 @@ export function snippetFor(item: CatalogItem, host: string): string {
       return `ollama pull ${host}/ollama/library/llama3`;
     case "ghcr":
       return `docker pull ${host}/ghcr/<owner>/<image>`;
+    case "r":
+      return [
+        `docker login ${host}`,
+        `docker pull ${host}/r/<registry-host>/<repo>:<tag>`,
+      ].join("\n");
     case "pypi":
       return [
         `pip install -i https://${host}/pypi/index/ requests`,
@@ -281,7 +292,7 @@ a.dom{font-family:var(--mono);color:var(--accent);text-decoration:none}
       <button class="toggle" id="t" title="切换主题" aria-label="切换主题">◐</button>
     </div>
   </header>
-  <p class="lead">单一域名、按路径分发的<strong>拉取式镜像代理</strong>。Docker / OCI 走 <code>/v2/&lt;registry&gt;/…</code>；GitHub、PyPI、npm、crates 等走 <code>/&lt;service&gt;/…</code>。私有 Docker 源不在此暴露。完整用法见 <a class="dom" href="/docs">/docs</a>（curl 返回 Markdown）。</p>
+  <p class="lead">单一域名、按路径分发的<strong>拉取式镜像代理</strong>。Docker / OCI 走 <code>/v2/&lt;registry&gt;/…</code>，任意第三方仓库走 <code>/v2/r/&lt;registry-host&gt;/…</code>（<code>docker login</code> 凭证只透传、不落盘）。GitHub、PyPI、npm、crates 等走 <code>/&lt;service&gt;/…</code>。完整用法见 <a class="dom" href="/docs">/docs</a>（curl 返回 Markdown）。</p>
   <div class="status" aria-live="polite">
     <span class="lab">节点</span>
     <span class="pill" data-probe="/v2/" data-hdr="docker-distribution-api-version">docker /v2</span>

@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,16 @@ const REQUEST_MS = 8000;
 const SMALL_YAML = Buffer.from("name: ph-workerd\npayload: " + "A".repeat(256) + "\n");
 const BLOB = Buffer.alloc(8192);
 for (let i = 0; i < BLOB.length; i++) BLOB[i] = i & 0xff;
+
+const R_MANIFEST = Buffer.from(
+  JSON.stringify({
+    schemaVersion: 2,
+    mediaType: "application/vnd.oci.image.manifest.v1+json",
+    config: { mediaType: "application/vnd.oci.image.config.v1+json", size: 8, digest: "sha256:" + "ab".repeat(32) },
+    layers: [],
+  }),
+);
+const R_TOKEN = "mock-r-token";
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -64,7 +74,48 @@ function startOrigin() {
       ["/blob.bin", { body: BLOB, type: "application/octet-stream" }],
     ]);
     const server = createServer((req, res) => {
-      const path = (req.url || "/").split("?")[0];
+      const raw = req.url || "/";
+      const path = raw.split("?")[0];
+      const addr = server.address();
+      const originPort = addr && typeof addr === "object" ? addr.port : 0;
+      if (path === "/v2" || path === "/v2/") {
+        res.writeHead(200, { "Docker-Distribution-Api-Version": "registry/2.0" });
+        res.end();
+        return;
+      }
+      if (path === "/token") {
+        const q = new URL(raw, "http://127.0.0.1");
+        if (q.searchParams.get("scope") !== "repository:test/image:pull") {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ errors: ["bad scope"] }));
+          return;
+        }
+        const body = JSON.stringify({ token: R_TOKEN });
+        res.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(body.length) });
+        res.end(body);
+        return;
+      }
+      if (path === "/v2/test/image/manifests/latest") {
+        if (req.headers.authorization !== `Bearer ${R_TOKEN}`) {
+          res.writeHead(401, {
+            "WWW-Authenticate": `Bearer realm="http://127.0.0.1:${originPort}/token",service="mock",scope="repository:test/image:pull"`,
+            "Docker-Distribution-Api-Version": "registry/2.0",
+          });
+          res.end();
+          return;
+        }
+        res.writeHead(200, {
+          "Content-Type": "application/vnd.oci.image.manifest.v1+json",
+          "Content-Length": String(R_MANIFEST.length),
+          "Docker-Distribution-Api-Version": "registry/2.0",
+        });
+        if (req.method === "HEAD") {
+          res.end();
+          return;
+        }
+        res.end(R_MANIFEST);
+        return;
+      }
       const file = files.get(path);
       if (!file) {
         res.writeHead(404, { "Content-Type": "text/plain" });
@@ -151,7 +202,7 @@ async function fetchExact(url, init = {}, ms = REQUEST_MS) {
   return { resp, buf };
 }
 
-function startWrangler(port, inspectorPort, persistDir) {
+function startWrangler(port, inspectorPort, persistDir, configPath) {
   const args = [
     "--yes",
     "wrangler@4",
@@ -166,7 +217,7 @@ function startWrangler(port, inspectorPort, persistDir) {
     "--persist-to",
     persistDir,
     "--config",
-    "wrangler.toml",
+    configPath,
     "--no-bundle",
     "--live-reload",
     "false",
@@ -224,7 +275,20 @@ describe("workerd integration (built worker.js)", { timeout: 180000 }, () => {
     persistDir = await mkdtemp(join(tmpdir(), "ph-wrangler-"));
     const port = await freePort();
     const inspectorPort = await freePort();
-    wrangler = startWrangler(port, inspectorPort, persistDir);
+    const configPath = join(persistDir, "wrangler.toml");
+    await writeFile(
+      configPath,
+      [
+        'name = "proxies-hub"',
+        `main = ${JSON.stringify(join(root, "dist/worker.js"))}`,
+        'compatibility_date = "2025-10-01"',
+        "",
+        "[vars]",
+        `GENERIC_REGISTRY_HTTP_ORIGINS = ${JSON.stringify(`127.0.0.1:${origin.port}`)}`,
+        "",
+      ].join("\n"),
+    );
+    wrangler = startWrangler(port, inspectorPort, persistDir, configPath);
     workerUrl = `http://127.0.0.1:${port}`;
     try {
       await waitHttp(`${workerUrl}/v2/`, 120000, wrangler.log);
@@ -311,6 +375,21 @@ describe("workerd integration (built worker.js)", { timeout: 180000 }, () => {
     assert.equal(miss.resp.status, 416);
     assert.equal(miss.resp.headers.get("content-range"), `bytes */${BLOB.length}`);
     assert.equal(miss.buf.byteLength, 0);
+  });
+
+  it("anonymous /v2/r/ pull against the mock registry returns a Content-Length body", async () => {
+    const host = `127.0.0.1:${origin.port}`;
+    const url = `${workerUrl}/v2/r/${host}/test/image/manifests/latest`;
+    const get = await fetchExact(url);
+    assert.equal(get.resp.status, 200, headerDump(get));
+    assert.equal(get.resp.headers.get("content-length"), String(R_MANIFEST.length), headerDump(get));
+    assert.deepEqual(get.buf, new Uint8Array(R_MANIFEST));
+    assert.equal(get.resp.headers.get("x-proxyhub"), "1");
+
+    const head = await fetchExact(url, { method: "HEAD" });
+    assert.equal(head.resp.status, 200, headerDump(head));
+    assert.equal(head.resp.headers.get("content-length"), String(R_MANIFEST.length));
+    assert.equal(head.buf.byteLength, 0);
   });
 
   it("GET /npm/left-pad delivers a matching Content-Length body when npm is reachable", async (t) => {
